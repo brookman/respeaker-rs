@@ -71,10 +71,7 @@ pub fn read(
 ) -> Result<Value> {
     let start = Instant::now();
     let (is_int, id, cmd) = match param_config {
-        ParamConfig::IntN(config)
-        | ParamConfig::Int2(config)
-        | ParamConfig::Int3(config)
-        | ParamConfig::Int4(config) => (true, config.id, config.cmd),
+        ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => (true, config.id, config.cmd),
         ParamConfig::Float(config) => (false, config.id, config.cmd),
     };
 
@@ -99,11 +96,7 @@ pub fn read(
     info!("Read parameter in {:?}", start.elapsed());
 
     if is_int {
-        if let ParamConfig::IntN(config)
-        | ParamConfig::Int2(config)
-        | ParamConfig::Int3(config)
-        | ParamConfig::Int4(config) = param_config
-        {
+        if let ParamConfig::IntMany(config) | ParamConfig::IntFew(config) = param_config {
             return Ok(Value::Int(config.clone(), response.0));
         }
         unreachable!();
@@ -126,10 +119,9 @@ pub fn write(
     let config = param.config();
 
     let (id, cmd, access) = match config {
-        ParamConfig::IntN(config)
-        | ParamConfig::Int2(config)
-        | ParamConfig::Int3(config)
-        | ParamConfig::Int4(config) => (config.id, config.cmd, config.access),
+        ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
+            (config.id, config.cmd, config.access)
+        }
         ParamConfig::Float(config) => (config.id, config.cmd, config.access),
     };
 
@@ -138,10 +130,7 @@ pub fn write(
     }
 
     let (cmd_bytes, value_bytes, type_bytes) = match config {
-        ParamConfig::IntN(config)
-        | ParamConfig::Int2(config)
-        | ParamConfig::Int3(config)
-        | ParamConfig::Int4(config) => {
+        ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
             let value = match value {
                 Value::Int(_, i) => *i,
                 Value::Float(_, _) => bail!("Value must be of type int"),

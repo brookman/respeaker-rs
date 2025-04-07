@@ -104,10 +104,8 @@ impl Param {
 
 #[derive(Debug, Clone)]
 pub enum ParamConfig {
-    IntN(Config<i32>),
-    Int2(Config<i32>),
-    Int3(Config<i32>),
-    Int4(Config<i32>),
+    IntMany(Config<i32>),
+    IntFew(Config<i32>),
     Float(Config<f32>),
 }
 
@@ -121,7 +119,7 @@ impl ParamConfig {
         description: &str,
         value_description_1: &str,
     ) -> Self {
-        Self::IntN(Config {
+        Self::IntMany(Config {
             id,
             cmd,
             min,
@@ -142,7 +140,7 @@ impl ParamConfig {
         value_description_1: &str,
         value_description_2: &str,
     ) -> Self {
-        Self::Int2(Config {
+        Self::IntFew(Config {
             id,
             cmd,
             min,
@@ -167,7 +165,7 @@ impl ParamConfig {
         value_description_2: &str,
         value_description_3: &str,
     ) -> Self {
-        Self::Int3(Config {
+        Self::IntFew(Config {
             id,
             cmd,
             min,
@@ -194,7 +192,7 @@ impl ParamConfig {
         value_description_3: &str,
         value_description_4: &str,
     ) -> Self {
-        Self::Int4(Config {
+        Self::IntFew(Config {
             id,
             cmd,
             min,
@@ -259,10 +257,8 @@ impl ParseValue for Config<f32> {
 impl ParseValue for ParamConfig {
     fn parse_value(&self, string: &str) -> Result<Value> {
         match self {
-            ParamConfig::IntN(config) => config.parse_value(string),
-            ParamConfig::Int2(config) => config.parse_value(string),
-            ParamConfig::Int3(config) => config.parse_value(string),
-            ParamConfig::Int4(config) => config.parse_value(string),
+            ParamConfig::IntMany(config) => config.parse_value(string),
+            ParamConfig::IntFew(config) => config.parse_value(string),
             ParamConfig::Float(config) => config.parse_value(string),
         }
     }

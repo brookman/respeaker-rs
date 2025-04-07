@@ -107,10 +107,7 @@ fn list(device_handle: &DeviceHandle<GlobalContext>) -> Result<String> {
         let config = p.config();
         let value = read(device_handle, config)?;
         match config {
-            ParamConfig::IntN(config)
-            | ParamConfig::Int2(config)
-            | ParamConfig::Int3(config)
-            | ParamConfig::Int4(config) => rows.push(TableRow {
+            ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => rows.push(TableRow {
                 name: format!("{p:?}"),
                 value,
                 t: "int".to_string(),

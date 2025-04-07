@@ -86,16 +86,14 @@ impl<'a> eframe::App for UiState<'a> {
                     match value {
                         Value::Int(c, i) => {
                             ui.horizontal(|ui| match param.config() {
-                                ParamConfig::IntN(_) => {
+                                ParamConfig::IntMany(_) => {
                                     ui.add_enabled(
                                         c.access == Access::ReadWrite,
                                         egui::Slider::new(i, c.min..=c.max)
                                             .text(format!("{}..={}", c.min, c.max)),
                                     );
                                 }
-                                ParamConfig::Int2(_)
-                                | ParamConfig::Int3(_)
-                                | ParamConfig::Int4(_) => {
+                                ParamConfig::IntFew(_) => {
                                     if c.access == Access::ReadWrite {
                                         egui::ComboBox::from_id_salt(param)
                                             .selected_text(&c.value_descriptions[*i as usize])
