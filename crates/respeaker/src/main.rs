@@ -7,17 +7,22 @@ use eyre::eyre;
 use params::Access;
 use params::Param;
 use params::ParamConfig;
+use params::ParseValue;
+use params::Value;
 use rusb::Device;
 use rusb::DeviceHandle;
 use rusb::GlobalContext;
 use std::time::Duration;
+use std::time::Instant;
 use strum::IntoEnumIterator;
 use tabled::Table;
 use tabled::Tabled;
 use tracing::Level;
 use tracing::info;
+use ui::run_ui;
 
 mod params;
+mod ui;
 
 /// Unofficial CLI & UI for the ReSpeaker Mic Array v2.0
 #[derive(Parser, Debug)]
@@ -61,11 +66,14 @@ fn main() -> eyre::Result<()> {
                 let value = read(&device, config)?;
                 info!("\n{param:?}={value}");
             }
-            Command::Write { param, value } => write(&device, &param, &value)?,
+            Command::Write { param, value } => {
+                write(&device, &param, &param.config().parse_value(&value)?)?;
+            }
             Command::Reset => reset(&device, interface)?,
         }
     } else {
         info!("Opening UI...");
+        run_ui(&device).map_err(|e| eyre!("UI error: {}", e))?;
     }
 
     Ok(())
@@ -114,11 +122,12 @@ fn open_device(device_index: Option<usize>) -> Result<(DeviceHandle<GlobalContex
 
         if device_desc.vendor_id() == VENDOR_ID && device_desc.product_id() == PRODUCT_ID {
             info!(
-                "Found: Bus {:03} Device {:03} ID {:04x}:{:04x}",
+                "Found: Bus {:03} Device {:03} ID {:04x}:{:04x}, speed: {:?}",
                 device.bus_number(),
                 device.address(),
                 device_desc.vendor_id(),
-                device_desc.product_id()
+                device_desc.product_id(),
+                device.speed()
             );
             devices.push(device);
         }
@@ -145,7 +154,7 @@ fn open_device(device_index: Option<usize>) -> Result<(DeviceHandle<GlobalContex
 #[derive(Tabled)]
 struct TableRow {
     name: String,
-    value: String,
+    value: Value,
     t: String,
     access: String,
     range: String,
@@ -195,7 +204,8 @@ fn list(device_handle: &DeviceHandle<GlobalContext>) -> Result<String> {
     Ok(Table::new(rows).to_string())
 }
 
-fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig) -> Result<String> {
+fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig) -> Result<Value> {
+    let start = Instant::now();
     let (is_int, id, cmd) = match param_config {
         ParamConfig::IntN(config)
         | ParamConfig::Int2(config)
@@ -222,19 +232,29 @@ fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig)
         i32::from_le_bytes(buffer[0..4].try_into()?),
         i32::from_le_bytes(buffer[4..8].try_into()?),
     );
+    info!("Read parameter in {:?}", start.elapsed());
 
-    let result = if is_int {
-        format!("{}", response.0)
+    if is_int {
+        if let ParamConfig::IntN(config)
+        | ParamConfig::Int2(config)
+        | ParamConfig::Int3(config)
+        | ParamConfig::Int4(config) = param_config
+        {
+            return Ok(Value::Int(config.clone(), response.0));
+        }
+        unreachable!();
     } else {
         #[allow(clippy::cast_possible_truncation)]
         let float = (f64::from(response.0) * f64::from(response.1).exp2()) as f32;
-        format!("{float}")
-    };
 
-    Ok(result)
+        if let ParamConfig::Float(config) = param_config {
+            return Ok(Value::Float(config.clone(), float));
+        }
+        unreachable!();
+    }
 }
 
-fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str) -> Result<()> {
+fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &Value) -> Result<()> {
     let config = param.config();
 
     let (id, cmd, access) = match config {
@@ -254,13 +274,14 @@ fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str
         | ParamConfig::Int2(config)
         | ParamConfig::Int3(config)
         | ParamConfig::Int4(config) => {
-            let value = value
-                .parse::<i32>()
-                .context("Could not parse value as int")?;
+            let value = match value {
+                Value::Int(_, i) => *i,
+                Value::Float(_, _) => bail!("Value must be of type int"),
+            };
 
             if value < config.min || value > config.max {
                 bail!(
-                    "Value {value} is not in range {}..{}",
+                    "Value {value} is not in range {}..={}",
                     config.min,
                     config.max
                 );
@@ -272,13 +293,14 @@ fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str
             )
         }
         ParamConfig::Float(config) => {
-            let value = value
-                .parse::<f32>()
-                .context("Could not parse value as float")?;
+            let value = match value {
+                Value::Int(_, _) => bail!("Value must be of type float"),
+                Value::Float(_, f) => *f,
+            };
 
             if value < config.min || value > config.max {
                 bail!(
-                    "Value {value} is not in range {}..{}",
+                    "Value {value} is not in range {}..={}",
                     config.min,
                     config.max
                 );
@@ -312,7 +334,7 @@ fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str
 fn reset(device_handle: &DeviceHandle<GlobalContext>, inteface: u8) -> Result<()> {
     const XMOS_DFU_RESETDEVICE: u8 = 0xF0;
     //const XMOS_DFU_REVERTFACTORY: u8 = 0xf1;
-   
+
     let request_type = rusb::request_type(
         rusb::Direction::Out,
         rusb::RequestType::Class,
@@ -331,7 +353,6 @@ fn reset(device_handle: &DeviceHandle<GlobalContext>, inteface: u8) -> Result<()
     )?;
 
     device_handle.release_interface(inteface)?;
-
 
     info!("Reset was successfull.");
 

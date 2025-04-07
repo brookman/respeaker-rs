@@ -1,4 +1,5 @@
-use std::sync::OnceLock;
+use eyre::{Context, Result};
+use std::{fmt::Display, sync::OnceLock};
 
 use clap::ValueEnum;
 use enum_map::{Enum, EnumMap, enum_map};
@@ -6,7 +7,7 @@ use strum_macros::EnumIter;
 
 #[allow(clippy::upper_case_acronyms)] // ReSpeaker API uses UPPERCASE
 #[allow(non_camel_case_types)] // ReSpeaker API uses UPPERCASE
-#[derive(Clone, Debug, Enum, ValueEnum, EnumIter)]
+#[derive(Clone, Debug, Enum, ValueEnum, EnumIter, Hash)]
 #[clap(rename_all = "verbatim")]
 pub enum Param {
     AECFREEZEONOFF,
@@ -222,7 +223,7 @@ impl ParamConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config<T> {
     pub id: u16,
     pub cmd: u16,
@@ -233,8 +234,57 @@ pub struct Config<T> {
     pub value_descriptions: Vec<String>,
 }
 
+pub trait ParseValue {
+    fn parse_value(&self, string: &str) -> Result<Value>;
+}
+
+impl ParseValue for Config<i32> {
+    fn parse_value(&self, string: &str) -> Result<Value> {
+        Ok(Value::Int(
+            self.clone(),
+            string.parse::<i32>().context("must be an i32")?,
+        ))
+    }
+}
+
+impl ParseValue for Config<f32> {
+    fn parse_value(&self, string: &str) -> Result<Value> {
+        Ok(Value::Float(
+            self.clone(),
+            string.parse::<f32>().context("must be an f32")?,
+        ))
+    }
+}
+
+impl ParseValue for ParamConfig {
+    fn parse_value(&self, string: &str) -> Result<Value> {
+        match self {
+            ParamConfig::IntN(config) => config.parse_value(string),
+            ParamConfig::Int2(config) => config.parse_value(string),
+            ParamConfig::Int3(config) => config.parse_value(string),
+            ParamConfig::Int4(config) => config.parse_value(string),
+            ParamConfig::Float(config) => config.parse_value(string),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     ReadOnly,
     ReadWrite,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Int(Config<i32>, i32),
+    Float(Config<f32>, f32),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Int(_, v) => f.write_str(&format!("{v}")),
+            Value::Float(_, v) => f.write_str(&format!("{v}")),
+        }
+    }
 }
