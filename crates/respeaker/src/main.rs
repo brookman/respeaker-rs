@@ -1,28 +1,20 @@
-use clap::{command, Parser, Subcommand};
-use eyre::eyre;
+use clap::{Parser, Subcommand, command};
 use eyre::Ok;
 use eyre::Result;
-use params::Access;
+use eyre::eyre;
 use params::Param;
-use params::ParamConfig;
 use params::ParseValue;
-use params::Value;
-use rusb::DeviceHandle;
-use rusb::GlobalContext;
+use respeaker_device::ReSpeakerDevice;
 
-use strum::IntoEnumIterator;
-use tabled::Table;
-use tabled::Tabled;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 use ui::run_ui;
-use usb::{open_device, read, reset, write};
 
 mod params;
+mod respeaker_device;
 mod ui;
-mod usb;
 
-/// Unofficial CLI & UI for the ReSpeaker Mic Array v2.0
+/// Unofficial CLI & UI for the Re-Speaker Mic Array v2.0
 #[derive(Parser, Debug)]
 #[command(version, long_about = None)]
 struct Arguments {
@@ -51,27 +43,28 @@ fn main() -> eyre::Result<()> {
 
     info!("Running unofficial ReSpeaker CLI with {args:?}");
 
-    let (device, interface) = open_device(args.device_index)?;
+    let mut device = ReSpeakerDevice::open(args.device_index)?;
 
     if let Some(command) = args.command {
         match command {
             Command::List => {
-                let list = list(&device)?;
+                let list = device.list()?;
                 info!("Parameters:\n{list}");
             }
             Command::Read { param } => {
                 let config = param.config();
-                let value = read(&device, config)?;
+                let value = device.read(config)?;
                 info!("\n{param:?}={value}");
             }
             Command::Write { param, value } => {
-                write(&device, &param, &param.config().parse_value(&value)?)?;
+                let value = param.config().parse_value(&value)?;
+                device.write(&param, &value)?;
             }
-            Command::Reset => reset(&device, interface)?,
+            Command::Reset => device.reset()?,
         }
     } else {
         info!("Opening UI...");
-        run_ui(&device).map_err(|e| eyre!("UI error: {}", e))?;
+        run_ui(device).map_err(|e| eyre!("UI error: {}", e))?;
     }
 
     Ok(())
@@ -88,54 +81,4 @@ where
         .try_init()
         .map_err(|e| eyre!("Tracing init error: {e}"))?;
     Ok(args)
-}
-
-#[derive(Tabled)]
-struct TableRow {
-    name: String,
-    value: Value,
-    t: String,
-    access: String,
-    range: String,
-    description: String,
-    values: String,
-}
-
-fn list(device_handle: &DeviceHandle<GlobalContext>) -> Result<String> {
-    let mut rows = vec![];
-    for p in Param::iter() {
-        let config = p.config();
-        let value = read(device_handle, config)?;
-        match config {
-            ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => rows.push(TableRow {
-                name: format!("{p:?}"),
-                value,
-                t: "int".to_string(),
-                access: if config.access == Access::ReadOnly {
-                    "ro"
-                } else {
-                    "rw"
-                }
-                .to_string(),
-                range: format!("{}..{}", config.min, config.max),
-                description: config.description.clone(),
-                values: config.value_descriptions.join("\n"),
-            }),
-            ParamConfig::Float(config) => rows.push(TableRow {
-                name: format!("{p:?}"),
-                value,
-                t: "float".to_string(),
-                access: if config.access == Access::ReadOnly {
-                    "ro"
-                } else {
-                    "rw"
-                }
-                .to_string(),
-                range: format!("{}..{}", config.min, config.max),
-                description: config.description.clone(),
-                values: config.value_descriptions.join("\n"),
-            }),
-        }
-    }
-    Ok(Table::new(rows).to_string())
 }

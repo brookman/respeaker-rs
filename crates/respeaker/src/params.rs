@@ -2,7 +2,7 @@ use eyre::{Context, Result};
 use std::{fmt::Display, sync::OnceLock};
 
 use clap::ValueEnum;
-use enum_map::{enum_map, Enum, EnumMap};
+use enum_map::{Enum, EnumMap, enum_map};
 use strum_macros::EnumIter;
 
 #[allow(clippy::upper_case_acronyms)] // ReSpeaker API uses UPPERCASE
@@ -221,7 +221,7 @@ impl ParamConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config<T> {
     pub id: u16,
     pub cmd: u16,
@@ -257,9 +257,8 @@ impl ParseValue for Config<f32> {
 impl ParseValue for ParamConfig {
     fn parse_value(&self, string: &str) -> Result<Value> {
         match self {
-            ParamConfig::IntMany(config) => config.parse_value(string),
-            ParamConfig::IntFew(config) => config.parse_value(string),
-            ParamConfig::Float(config) => config.parse_value(string),
+            Self::IntFew(config) | Self::IntMany(config) => config.parse_value(string),
+            Self::Float(config) => config.parse_value(string),
         }
     }
 }
@@ -279,8 +278,8 @@ pub enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Int(_, v) => f.write_str(&format!("{v}")),
-            Value::Float(_, v) => f.write_str(&format!("{v}")),
+            Self::Int(_, v) => f.write_str(&format!("{v}")),
+            Self::Float(_, v) => f.write_str(&format!("{v}")),
         }
     }
 }

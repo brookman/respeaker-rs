@@ -1,14 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
+use std::time::Duration;
+
 use eframe::egui;
 use enum_map::EnumMap;
-use rusb::{DeviceHandle, GlobalContext};
+use eyre::eyre;
 use tracing::info;
 
 use crate::{
     params::{Access, Param, ParamConfig, Value},
-    read, write,
+    respeaker_device::ReSpeakerDevice,
 };
 
 // macro_rules! on_change {
@@ -20,7 +22,7 @@ use crate::{
 //     };
 // }
 
-pub fn run_ui(device_handle: &DeviceHandle<GlobalContext>) -> eframe::Result {
+pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 1000.0]),
         ..Default::default()
@@ -32,25 +34,36 @@ pub fn run_ui(device_handle: &DeviceHandle<GlobalContext>) -> eframe::Result {
             // This gives us image support:
             // egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            Ok(Box::new(UiState::new(device_handle)))
+            Ok(Box::new(UiState::new(device)?))
         }),
     )
+    .map_err(|e| eyre!("Ui error: {:?}", e))
 }
 
-struct UiState<'a> {
+struct UiState {
     params: Vec<(Param, Value)>,
     previous_params: Vec<(Param, Value)>,
-    device_handle: &'a DeviceHandle<GlobalContext>,
+    device: ReSpeakerDevice,
 }
 
-impl<'a> UiState<'a> {
-    fn new(device_handle: &'a DeviceHandle<GlobalContext>) -> Self {
+impl UiState {
+    fn new(device: ReSpeakerDevice) -> eyre::Result<Self> {
+        let mut state = Self {
+            params: vec![],
+            previous_params: vec![],
+            device,
+        };
+        state.read_all_params()?;
+        Ok(state)
+    }
+
+    fn read_all_params(&mut self) -> eyre::Result<()> {
         let map = EnumMap::from_fn(|p: Param| {
             let config = p.config();
-            read(device_handle, config).unwrap()
+            self.device.read(config).unwrap()
         });
         let mut params = map.into_iter().collect::<Vec<_>>();
-        params.sort_by_key(|(param, value)| {
+        params.sort_by_key(|(_, value)| {
             (
                 match value {
                     Value::Int(config, _) => match config.access {
@@ -68,15 +81,13 @@ impl<'a> UiState<'a> {
                 },
             )
         });
-        Self {
-            params: params.clone(),
-            previous_params: params,
-            device_handle,
-        }
+        self.params = params.clone();
+        self.previous_params = params;
+        Ok(())
     }
 }
 
-impl<'a> eframe::App for UiState<'a> {
+impl eframe::App for UiState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
@@ -126,6 +137,10 @@ impl<'a> eframe::App for UiState<'a> {
                     ui.end_row();
                 }
             });
+            if ui.button("Reset device").clicked() {
+                self.device.reset().unwrap();
+                self.read_all_params().unwrap();
+            }
         });
 
         // for (p, value) in &self.previous_params {
@@ -146,7 +161,7 @@ impl<'a> eframe::App for UiState<'a> {
             if new != old {
                 info!("Value has changed: {p:?}, old={}, new={}", old, new);
 
-                write(&self.device_handle, p, &new).unwrap();
+                self.device.write(p, &new).unwrap();
                 any_changes = true;
             }
         }
