@@ -39,7 +39,7 @@ enum Command {
     Read { param: Param },
     /// Write the value of a specific parameter
     Write { param: Param, value: String },
-    /// Perform a factory reset
+    /// Perform a device reset
     Reset,
 }
 
@@ -62,7 +62,7 @@ fn main() -> eyre::Result<()> {
                 info!("\n{param:?}={value}");
             }
             Command::Write { param, value } => write(&device, &param, &value)?,
-            Command::Reset => factory_reset(&device, interface)?,
+            Command::Reset => reset(&device, interface)?,
         }
     } else {
         info!("Opening UI...");
@@ -93,14 +93,13 @@ fn open_device(device_index: Option<usize>) -> Result<(DeviceHandle<GlobalContex
         let config_desc = device.active_config_descriptor()?;
         for interface in config_desc.interfaces() {
             for interface_desc in interface.descriptors() {
-                if interface_desc.class_code() == 0xFE && interface_desc.sub_class_code() == 0x01 {
+                if interface_desc.class_code() == 0xfe && interface_desc.sub_class_code() == 0x01 {
                     let iface_num = interface_desc.interface_number();
-                    handle.claim_interface(iface_num)?;
                     return Ok((handle, iface_num));
                 }
             }
         }
-        bail!("Could not open device")
+        bail!("Could not find correct interface")
     }
 
     const VENDOR_ID: u16 = 0x2886;
@@ -310,24 +309,31 @@ fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str
     Ok(())
 }
 
-fn factory_reset(device_handle: &DeviceHandle<GlobalContext>, inteface: u8) -> Result<()> {
-    const XMOS_DFU_REVERTFACTORY: u8 = 0xF1;
-
+fn reset(device_handle: &DeviceHandle<GlobalContext>, inteface: u8) -> Result<()> {
+    const XMOS_DFU_RESETDEVICE: u8 = 0xF0;
+    //const XMOS_DFU_REVERTFACTORY: u8 = 0xf1;
+   
     let request_type = rusb::request_type(
         rusb::Direction::Out,
         rusb::RequestType::Class,
         rusb::Recipient::Interface,
     );
 
-    // No data, value = 0
+    device_handle.claim_interface(inteface)?;
+
     device_handle.write_control(
         request_type,
-        XMOS_DFU_REVERTFACTORY,
+        XMOS_DFU_RESETDEVICE,
         0,
         u16::from(inteface),
         &[],
         TIMEOUT,
     )?;
+
+    device_handle.release_interface(inteface)?;
+
+
+    info!("Reset was successfull.");
 
     Ok(())
 }
