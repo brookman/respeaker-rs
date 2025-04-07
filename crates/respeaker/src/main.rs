@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, command};
+use eyre::Context;
 use eyre::Ok;
 use eyre::Result;
 use eyre::bail;
@@ -57,7 +58,7 @@ fn main() -> eyre::Result<()> {
                 let value = read(&device, config)?;
                 info!("\n{param:?}={value}");
             }
-            Command::Write { param, value } => todo!(),
+            Command::Write { param, value } => write(&device, &param, &value)?,
         }
     } else {
         info!("Opening UI...");
@@ -202,7 +203,7 @@ fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig)
         cmd,
         id,
         &mut buffer,
-        Duration::from_secs(5),
+        Duration::from_secs(3),
     )?;
     let response = (
         i32::from_le_bytes(buffer[0..4].try_into()?),
@@ -218,4 +219,79 @@ fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig)
     };
 
     Ok(result)
+}
+
+fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str) -> Result<()> {
+    let config = param.config();
+
+    let (id, cmd, access) = match config {
+        ParamConfig::IntN(config)
+        | ParamConfig::Int2(config)
+        | ParamConfig::Int3(config)
+        | ParamConfig::Int4(config) => (config.id, config.cmd, config.access),
+        ParamConfig::Float(config) => (config.id, config.cmd, config.access),
+    };
+
+    if access == Access::ReadOnly {
+        bail!("Parameter {:?} is read-only", param);
+    }
+
+    let (cmd_bytes, value_bytes, type_bytes) = match config {
+        ParamConfig::IntN(config)
+        | ParamConfig::Int2(config)
+        | ParamConfig::Int3(config)
+        | ParamConfig::Int4(config) => {
+            let value = value
+                .parse::<i32>()
+                .context("Could not parse value as int")?;
+
+            if value < config.min || value > config.max {
+                bail!(
+                    "Value {value} is not in range {}..{}",
+                    config.min,
+                    config.max
+                );
+            }
+            (
+                i32::from(cmd).to_le_bytes(),
+                value.to_le_bytes(),
+                1i32.to_le_bytes(),
+            )
+        }
+        ParamConfig::Float(config) => {
+            let value = value
+                .parse::<f32>()
+                .context("Could not parse value as float")?;
+
+            if value < config.min || value > config.max {
+                bail!(
+                    "Value {value} is not in range {}..{}",
+                    config.min,
+                    config.max
+                );
+            }
+            (
+                i32::from(cmd).to_le_bytes(),
+                value.to_le_bytes(),
+                0i32.to_le_bytes(),
+            )
+        }
+    };
+
+    let mut payload = Vec::with_capacity(12);
+    payload.extend_from_slice(&cmd_bytes);
+    payload.extend_from_slice(&value_bytes);
+    payload.extend_from_slice(&type_bytes);
+
+    let request_type = rusb::request_type(
+        rusb::Direction::Out,
+        rusb::RequestType::Vendor,
+        rusb::Recipient::Device,
+    );
+
+    device_handle.write_control(request_type, 0, 0, id, &payload, Duration::from_secs(3))?;
+
+    info!("Wrote value {value} to param {:?} successfully", param);
+
+    Ok(())
 }
