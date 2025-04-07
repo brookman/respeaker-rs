@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use eframe::egui;
 use enum_map::EnumMap;
@@ -13,54 +17,79 @@ use crate::{
     respeaker_device::ReSpeakerDevice,
 };
 
-// macro_rules! on_change {
-//     ($prev:expr, $curr:expr, $body:block) => {
-//         if $prev != $curr {
-//             $prev = $curr.clone();
-//             $body
-//         }
-//     };
-// }
-
 pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
-    let options = eframe::NativeOptions {
+        let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 1000.0]),
         ..Default::default()
     };
     eframe::run_native(
         "Unofficial CLI & UI for the ReSpeaker Mic Array v2.0",
         options,
-        Box::new(|_cc| {
-            // This gives us image support:
-            // egui_extras::install_image_loaders(&cc.egui_ctx);
+        Box::new(|cc| {
+            let ctx = cc.egui_ctx.clone();
+            let ui_state = UiState::new(ctx, device)?;
 
-            Ok(Box::new(UiState::new(device)?))
+            let state_arc = ui_state.state.clone();
+            thread::spawn(move || {
+                loop {
+                    {
+                        let mut state = state_arc.lock().unwrap();
+                        let params_indices_to_read = state.params.iter().enumerate().filter(|(_,(_,v))|match v {
+                            Value::Int(config, _) => config.access,
+                            Value::Float(config, _) => config.access,
+                        } == Access::ReadOnly).map(|(i,_)|i).collect::<Vec<_>>();
+        
+                        for i in params_indices_to_read {
+                            let config = state.params.get(i).unwrap().0.config();
+                            let new_value = state.device.read(config).unwrap();
+                            state.params.get_mut(i).unwrap().1 = new_value.clone();
+                            state.previous_params.get_mut(i).unwrap().1 = new_value;
+                        }
+                        state.ctx.request_repaint();
+                    }
+        
+                    thread::sleep(Duration::from_millis(50));
+                }
+            });
+        
+
+            Ok(Box::new(ui_state))
         }),
     )
     .map_err(|e| eyre!("Ui error: {:?}", e))
 }
 
 struct UiState {
+   
+    state: Arc<Mutex<InnerUiState>>,
+}
+
+struct InnerUiState {
+    ctx: egui::Context,
     params: Vec<(Param, Value)>,
     previous_params: Vec<(Param, Value)>,
     device: ReSpeakerDevice,
 }
 
 impl UiState {
-    fn new(device: ReSpeakerDevice) -> eyre::Result<Self> {
+    fn new(ctx: egui::Context, device: ReSpeakerDevice) -> eyre::Result<Self> {
         let mut state = Self {
-            params: vec![],
-            previous_params: vec![],
-            device,
+            state: Arc::new(Mutex::new(InnerUiState {
+                ctx,
+                params: vec![],
+                previous_params: vec![],
+                device,
+            })),
         };
         state.read_all_params()?;
         Ok(state)
     }
 
     fn read_all_params(&mut self) -> eyre::Result<()> {
+        let mut state = self.state.lock().unwrap();
         let map = EnumMap::from_fn(|p: Param| {
             let config = p.config();
-            self.device.read(config).unwrap()
+            state.device.read(config).unwrap()
         });
         let mut params = map.into_iter().collect::<Vec<_>>();
         params.sort_by_key(|(_, value)| {
@@ -81,8 +110,10 @@ impl UiState {
                 },
             )
         });
-        self.params = params.clone();
-        self.previous_params = params;
+
+        state.params = params.clone();
+        state.previous_params = params;
+
         Ok(())
     }
 }
@@ -92,7 +123,8 @@ impl eframe::App for UiState {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
             egui::Grid::new("Parameter grid").show(ui, |ui| {
-                for (param, value) in &mut self.params {
+                let mut state = self.state.lock().unwrap();
+                for (param, value) in &mut state.params {
                     ui.label(format!("{param:?}"));
                     match value {
                         Value::Int(c, i) => {
@@ -138,35 +170,29 @@ impl eframe::App for UiState {
                 }
             });
             if ui.button("Reset device").clicked() {
-                self.device.reset().unwrap();
+                {
+                    let mut state = self.state.lock().unwrap();
+                    state.device.reset().unwrap();
+                }
                 self.read_all_params().unwrap();
             }
         });
 
-        // for (p, value) in &self.previous_params {
-        //     let access = match value {
-        //         Value::Int(c, _) => c.access,
-        //         Value::Float(c, _) => c.access,
-        //     };
-        //     if access == Access::ReadOnly {
-        //         let new_value = read(self.device_handle, p.config()).unwrap();
-        //         for (_, value) in &mut self.params {
-        //             *value = new_value.clone();
-        //         }
-        //     }
-        // }
+        {
+            let mut state = self.state.lock().unwrap();
 
-        let mut any_changes = false;
-        for ((p, new), (_, old)) in &mut self.params.iter().zip(self.previous_params.iter()) {
-            if new != old {
-                info!("Value has changed: {p:?}, old={}, new={}", old, new);
+            let mut any_changes = false;
+            for ((p, new), (_, old)) in &mut state.params.iter().zip(state.previous_params.iter()) {
+                if new != old {
+                    info!("Value has changed: {p:?}, old={}, new={}", old, new);
 
-                self.device.write(p, &new).unwrap();
-                any_changes = true;
+                    state.device.write(p, &new).unwrap();
+                    any_changes = true;
+                }
             }
-        }
-        if any_changes {
-            self.previous_params = self.params.clone();
+            if any_changes {
+                state.previous_params = state.params.clone();
+            }
         }
     }
 }
