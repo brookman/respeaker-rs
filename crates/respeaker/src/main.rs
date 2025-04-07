@@ -7,6 +7,7 @@ use eyre::eyre;
 use params::Access;
 use params::Param;
 use params::ParamConfig;
+use rusb::Device;
 use rusb::DeviceHandle;
 use rusb::GlobalContext;
 use std::time::Duration;
@@ -38,6 +39,8 @@ enum Command {
     Read { param: Param },
     /// Write the value of a specific parameter
     Write { param: Param, value: String },
+    /// Perform a factory reset
+    Reset,
 }
 
 fn main() -> eyre::Result<()> {
@@ -45,7 +48,7 @@ fn main() -> eyre::Result<()> {
 
     info!("Running unofficial ReSpeaker CLI with {args:?}");
 
-    let device = open_device(args.device_index)?;
+    let (device, interface) = open_device(args.device_index)?;
 
     if let Some(command) = args.command {
         match command {
@@ -59,6 +62,7 @@ fn main() -> eyre::Result<()> {
                 info!("\n{param:?}={value}");
             }
             Command::Write { param, value } => write(&device, &param, &value)?,
+            Command::Reset => factory_reset(&device, interface)?,
         }
     } else {
         info!("Opening UI...");
@@ -66,6 +70,8 @@ fn main() -> eyre::Result<()> {
 
     Ok(())
 }
+
+const TIMEOUT: Duration = Duration::from_secs(2);
 
 fn init<T>() -> Result<T>
 where
@@ -80,7 +86,23 @@ where
     Ok(args)
 }
 
-fn open_device(device_index: Option<usize>) -> Result<DeviceHandle<GlobalContext>> {
+fn open_device(device_index: Option<usize>) -> Result<(DeviceHandle<GlobalContext>, u8)> {
+    fn open(device: &Device<GlobalContext>) -> Result<(DeviceHandle<GlobalContext>, u8)> {
+        let handle = device.open()?;
+
+        let config_desc = device.active_config_descriptor()?;
+        for interface in config_desc.interfaces() {
+            for interface_desc in interface.descriptors() {
+                if interface_desc.class_code() == 0xFE && interface_desc.sub_class_code() == 0x01 {
+                    let iface_num = interface_desc.interface_number();
+                    handle.claim_interface(iface_num)?;
+                    return Ok((handle, iface_num));
+                }
+            }
+        }
+        bail!("Could not open device")
+    }
+
     const VENDOR_ID: u16 = 0x2886;
     const PRODUCT_ID: u16 = 0x0018;
 
@@ -104,7 +126,7 @@ fn open_device(device_index: Option<usize>) -> Result<DeviceHandle<GlobalContext
     }
     if let Some(i) = device_index {
         if let Some(d) = devices.get(i) {
-            return Ok(d.open()?);
+            return open(d);
         }
         bail!(
             "Device index (-i argument) out of range. Index was {i} but {} devices found.",
@@ -112,8 +134,7 @@ fn open_device(device_index: Option<usize>) -> Result<DeviceHandle<GlobalContext
         );
     }
     if devices.len() == 1 {
-        let handle = devices[0].open()?;
-        return Ok(handle);
+        return open(&devices[0]);
     }
     if devices.len() > 1 {
         bail!("Multiple devices found. Specify the a device index with -i.")
@@ -197,14 +218,7 @@ fn read(device_handle: &DeviceHandle<GlobalContext>, param_config: &ParamConfig)
         rusb::Recipient::Device,
     );
 
-    device_handle.read_control(
-        request_type,
-        0,
-        cmd,
-        id,
-        &mut buffer,
-        Duration::from_secs(3),
-    )?;
+    device_handle.read_control(request_type, 0, cmd, id, &mut buffer, TIMEOUT)?;
     let response = (
         i32::from_le_bytes(buffer[0..4].try_into()?),
         i32::from_le_bytes(buffer[4..8].try_into()?),
@@ -289,9 +303,31 @@ fn write(device_handle: &DeviceHandle<GlobalContext>, param: &Param, value: &str
         rusb::Recipient::Device,
     );
 
-    device_handle.write_control(request_type, 0, 0, id, &payload, Duration::from_secs(3))?;
+    device_handle.write_control(request_type, 0, 0, id, &payload, TIMEOUT)?;
 
     info!("Wrote value {value} to param {:?} successfully", param);
+
+    Ok(())
+}
+
+fn factory_reset(device_handle: &DeviceHandle<GlobalContext>, inteface: u8) -> Result<()> {
+    const XMOS_DFU_REVERTFACTORY: u8 = 0xF1;
+
+    let request_type = rusb::request_type(
+        rusb::Direction::Out,
+        rusb::RequestType::Class,
+        rusb::Recipient::Interface,
+    );
+
+    // No data, value = 0
+    device_handle.write_control(
+        request_type,
+        XMOS_DFU_REVERTFACTORY,
+        0,
+        u16::from(inteface),
+        &[],
+        TIMEOUT,
+    )?;
 
     Ok(())
 }
