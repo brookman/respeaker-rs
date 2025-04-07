@@ -2,7 +2,7 @@ use eyre::{Context, Result};
 use std::{fmt::Display, sync::OnceLock};
 
 use clap::ValueEnum;
-use enum_map::{Enum, EnumMap, enum_map};
+use enum_map::{enum_map, Enum, EnumMap};
 use strum_macros::EnumIter;
 
 #[allow(clippy::upper_case_acronyms)] // ReSpeaker API uses UPPERCASE
