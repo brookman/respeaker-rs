@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
+    fs::create_dir,
     path::PathBuf,
     sync::mpsc::{self, Sender},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cpal::{
@@ -14,7 +15,9 @@ use eyre::{OptionExt, bail};
 use tracing::{error, info, trace};
 
 use crate::{
-    csv::write_csv, params::{Param, Value}, respeaker_device::ReSpeakerDevice
+    csv::write_csv,
+    params::{Param, Value},
+    respeaker_device::ReSpeakerDevice,
 };
 
 pub fn record_audio(
@@ -66,7 +69,14 @@ pub fn record_audio(
         _ => bail!("Only supporting F32 sample format for now"),
     }?;
 
-    let wav_path = wav_path.unwrap_or_else(|| PathBuf::from("recording.wav"));
+    let dir = PathBuf::from("./recordings");
+    if wav_path.is_none() && !dir.exists() {
+        create_dir(dir)?;
+    }
+    let creation_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+
+    let wav_path = wav_path
+        .unwrap_or_else(|| PathBuf::from(format!("./recordings/{creation_time}.wav")));
     let mut writer = hound::WavWriter::create(&wav_path, spec)?;
     let mut number_of_samples_written = 0;
 
@@ -113,12 +123,14 @@ pub fn record_audio(
             }
         }
     }
-    
+
     drop(stream);
 
     shutdown_tx.send(())?;
     let csv_data = join_handle.join().unwrap()?;
-    write_csv(csv_data, &PathBuf::from("recording.csv") )?;
+    let mut csv_path = wav_path.clone();
+    csv_path.set_extension("csv");
+    write_csv(csv_data, &csv_path)?;
 
     info!("Recording successful");
 

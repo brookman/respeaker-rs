@@ -2,5 +2,4 @@
 .DS_Store
 /result
 /testbed/result
-recording.wav
-recording.csv
+/recordings

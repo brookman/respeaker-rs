@@ -9,7 +9,7 @@ use crate::params::{Param, Value};
 pub fn write_csv(data: Vec<(f32, HashMap<Param, Value>)>, file_path: &PathBuf) -> eyre::Result<()> {
     info!("Writing CSV file '{file_path:?}' with {} lines", data.len());
 
-    let params: Vec<Param> = Param::iter().collect();
+    let params: Vec<Param> = Param::sorted();
     let mut wtr = Writer::from_writer(File::create(file_path)?);
 
     let mut headers = vec!["timestamp".to_string()];

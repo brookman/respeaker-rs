@@ -92,8 +92,7 @@ impl ReSpeakerDevice {
     }
 
     pub fn read(&self, param: &Param) -> Result<Value> {
-        let param_config = param.config();
-        let value = self.read_internal(param_config)?;
+        let value = self.read_internal(param)?;
         {
             let mut params = self.param_state.lock().unwrap();
             params.current_params.insert(param.clone(), value.clone());
@@ -101,8 +100,9 @@ impl ReSpeakerDevice {
         Ok(value)
     }
 
-    fn read_internal(&self, param_config: &ParamConfig) -> Result<Value> {
+    fn read_internal(&self, param: &Param) -> Result<Value> {
         let start = Instant::now();
+        let param_config = param.config();
         let (is_int, id, cmd) = match param_config {
             ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
                 (true, config.id, config.cmd)
@@ -129,7 +129,7 @@ impl ReSpeakerDevice {
             i32::from_le_bytes(buffer[0..4].try_into()?),
             i32::from_le_bytes(buffer[4..8].try_into()?),
         );
-        info!("Read parameter in {:?}", start.elapsed());
+        info!("Read parameter {:?} in {:?}", param, start.elapsed());
 
         if is_int {
             if let ParamConfig::IntMany(config) | ParamConfig::IntFew(config) = param_config {
