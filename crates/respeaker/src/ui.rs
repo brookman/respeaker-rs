@@ -2,6 +2,7 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
@@ -9,7 +10,6 @@ use std::{
 };
 
 use eframe::egui;
-use enum_map::EnumMap;
 use eyre::{OptionExt, eyre};
 use tracing::info;
 
@@ -35,6 +35,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
             let ctx = cc.egui_ctx.clone();
             let ui_state = UiState::new(device)?;
 
+            let device_arc = ui_state.device.clone();
             let state_arc = ui_state.state.clone();
             join_handle = Some(thread::spawn(move || {
                 loop {
@@ -44,24 +45,24 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                     }
                     {
                         let mut state = state_arc.lock().unwrap();
-                        let params_indices_to_read = state
-                            .params
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, (p, _))| p.config().access() == Access::ReadOnly)
-                            .map(|(i, _)| i)
-                            .collect::<Vec<_>>();
 
-                        for i in params_indices_to_read {
-                            let param = state.params.get(i).ok_or_eyre("Param not available")?;
-                            let new_value = state.device.read(&param.0)?;
-                            state.params.get_mut(i).ok_or_eyre("Param not available")?.1 =
-                                new_value.clone();
-                            state
+                        for param in Param::sorted()
+                            .iter()
+                            .filter(|p| p.config().access() == Access::ReadOnly)
+                        {
+                            let new_value = {
+                                let device = device_arc.lock().unwrap();
+                                device.read(param)?
+                            };
+
+                            *state
+                                .params
+                                .get_mut(param)
+                                .ok_or_eyre("Param not available")? = new_value.clone();
+                            *state
                                 .previous_params
-                                .get_mut(i)
-                                .ok_or_eyre("Param not available")?
-                                .1 = new_value;
+                                .get_mut(param)
+                                .ok_or_eyre("Param not available")? = new_value;
                         }
                     }
                     ctx.request_repaint();
@@ -86,13 +87,13 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
 }
 
 struct UiState {
+    device: Arc<Mutex<ReSpeakerDevice>>,
     state: Arc<Mutex<InnerUiState>>,
 }
 
 struct InnerUiState {
-    params: Vec<(Param, Value)>,
-    previous_params: Vec<(Param, Value)>,
-    device: ReSpeakerDevice,
+    params: HashMap<Param, Value>,
+    previous_params: HashMap<Param, Value>,
     recording_state: RecordingState,
 }
 
@@ -106,11 +107,11 @@ enum RecordingState {
 
 impl UiState {
     fn new(device: ReSpeakerDevice) -> eyre::Result<Self> {
-        let mut state = Self {
+        let state = Self {
+            device: Arc::new(Mutex::new(device)),
             state: Arc::new(Mutex::new(InnerUiState {
-                params: vec![],
-                previous_params: vec![],
-                device,
+                params: HashMap::new(),
+                previous_params: HashMap::new(),
                 recording_state: RecordingState::Idle,
             })),
         };
@@ -118,31 +119,23 @@ impl UiState {
         Ok(state)
     }
 
-    fn update_all_params(&mut self) -> eyre::Result<()> {
-        let mut state = self.state.lock().unwrap();
-        let map = EnumMap::from_fn(|p: Param| state.device.read(&p).unwrap());
-        let mut params = map.into_iter().collect::<Vec<_>>();
-        params.sort_by_key(|(_, value)| {
-            (
-                match value {
-                    Value::Int(config, _) => match config.access {
-                        Access::ReadOnly => 1,
-                        Access::ReadWrite => 0,
-                    },
-                    Value::Float(config, _) => match config.access {
-                        Access::ReadOnly => 1,
-                        Access::ReadWrite => 0,
-                    },
-                },
-                match value {
-                    Value::Int(_, _) => 0,
-                    Value::Float(_, _) => 1,
-                },
-            )
-        });
+    fn update_all_params(&self) -> eyre::Result<()> {
+        let params = Param::sorted()
+            .into_iter()
+            .map(|p| {
+                let value = {
+                    let device = self.device.lock().unwrap();
+                    device.read(&p)?
+                };
+                Ok((p, value))
+            })
+            .collect::<eyre::Result<HashMap<_, _>>>()?;
 
-        state.params = params.clone();
-        state.previous_params = params;
+        {
+            let mut state = self.state.lock().unwrap();
+            state.params.clone_from(&params);
+            state.previous_params = params;
+        }
 
         Ok(())
     }
@@ -153,8 +146,11 @@ impl eframe::App for UiState {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
             egui::Grid::new("Parameter grid").show(ui, |ui| {
-                let mut state = self.state.lock().unwrap();
-                for (param, value) in &mut state.params {
+        
+                for param in Param::sorted() {
+                    let mut state = self.state.lock().unwrap();
+                    let value = state.params.get_mut(&param).unwrap();
+
                     ui.label(format!("{param:?}"));
                     match value {
                         Value::Int(c, i) => {
@@ -201,8 +197,8 @@ impl eframe::App for UiState {
             });
             if ui.button("Reset device").clicked() {
                 {
-                    let mut state = self.state.lock().unwrap();
-                    state.device.reset().unwrap();
+                    let mut device = self.device.lock().unwrap();
+                    device.reset().unwrap();
                 }
                 self.update_all_params().unwrap();
             }
@@ -223,7 +219,11 @@ impl eframe::App for UiState {
                 if new != old {
                     info!("Value has changed: {p:?}, old={}, new={}", old, new);
 
-                    state.device.write(p, &new).unwrap();
+                    {
+                        let device = self.device.lock().unwrap();
+                        device.write(p, &new).unwrap();
+                    }
+
                     any_changes = true;
                 }
             }

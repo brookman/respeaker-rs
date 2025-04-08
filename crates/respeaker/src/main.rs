@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -11,7 +10,6 @@ use eyre::eyre;
 use params::Param;
 use params::ParamState;
 use params::ParseValue;
-use params::Value;
 use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
@@ -57,7 +55,6 @@ enum Command {
     },
 }
 
-
 fn main() -> eyre::Result<()> {
     let args: Arguments = init()?;
 
@@ -88,7 +85,10 @@ fn main() -> eyre::Result<()> {
                 seconds,
                 wav_path,
                 mic_index,
-            } => record_audio(seconds, wav_path, mic_index)?,
+            } => {
+                device.list()?; // read all params into cache initially
+                record_audio(seconds, wav_path, mic_index, device)?;
+            }
         }
     } else {
         info!("Opening UI...");

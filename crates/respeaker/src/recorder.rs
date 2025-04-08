@@ -1,6 +1,9 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::mpsc::{self, Sender},
+    thread,
+    time::{Duration, Instant},
 };
 
 use cpal::{
@@ -10,10 +13,15 @@ use cpal::{
 use eyre::{OptionExt, bail};
 use tracing::{error, info, trace};
 
+use crate::{
+    csv::write_csv, params::{Param, Value}, respeaker_device::ReSpeakerDevice
+};
+
 pub fn record_audio(
     seconds_to_record: f32,
     wav_path: Option<PathBuf>,
     index_override: Option<usize>,
+    device: ReSpeakerDevice,
 ) -> eyre::Result<()> {
     // mics
     let host = cpal::default_host();
@@ -54,17 +62,8 @@ pub fn record_audio(
     let (tx, rx) = mpsc::channel();
 
     let (number_of_samples_to_record, spec, stream) = match sample_format {
-        cpal::SampleFormat::I8 => todo!(),
-        cpal::SampleFormat::I16 => todo!(),
-        cpal::SampleFormat::I32 => todo!(),
-        cpal::SampleFormat::I64 => todo!(),
-        cpal::SampleFormat::U8 => todo!(),
-        cpal::SampleFormat::U16 => todo!(),
-        cpal::SampleFormat::U32 => todo!(),
-        cpal::SampleFormat::U64 => todo!(),
         cpal::SampleFormat::F32 => build_input_stream(seconds_to_record, mic, &config, tx),
-        cpal::SampleFormat::F64 => todo!(),
-        _ => todo!(),
+        _ => bail!("Only supporting F32 sample format for now"),
     }?;
 
     let wav_path = wav_path.unwrap_or_else(|| PathBuf::from("recording.wav"));
@@ -76,6 +75,30 @@ pub fn record_audio(
         seconds_to_record, wav_path
     );
     stream.play()?;
+
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+
+    let join_handle: thread::JoinHandle<eyre::Result<Vec<(f32, HashMap<Param, Value>)>>> =
+        thread::spawn(move || {
+            let mut csv_data: Vec<(f32, HashMap<Param, Value>)> = vec![];
+            let start = Instant::now();
+            loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    info!("Refresh thread is shutting down");
+                    break;
+                }
+
+                device.read_ro()?; // update readonly values
+                let params = {
+                    let params = device.params().lock().unwrap().current_params.clone();
+                    params
+                };
+
+                csv_data.push((start.elapsed().as_secs_f32(), params));
+                thread::sleep(Duration::from_millis(10));
+            }
+            eyre::Ok(csv_data)
+        });
 
     loop {
         if let Ok(chunk) = rx.recv() {
@@ -90,8 +113,14 @@ pub fn record_audio(
             }
         }
     }
-    info!("Recording successful");
+    
     drop(stream);
+
+    shutdown_tx.send(())?;
+    let csv_data = join_handle.join().unwrap()?;
+    write_csv(csv_data, &PathBuf::from("recording.csv") )?;
+
+    info!("Recording successful");
 
     Ok(())
 }

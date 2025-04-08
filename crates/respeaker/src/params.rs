@@ -1,5 +1,6 @@
 use eyre::{Context, Result};
-use std::{collections::HashMap, fmt::Display, sync::OnceLock};
+use std::{collections::HashMap, fmt::Display, path::Iter, sync::OnceLock};
+use strum::IntoEnumIterator;
 
 use clap::ValueEnum;
 use enum_map::{Enum, EnumMap, enum_map};
@@ -99,6 +100,24 @@ impl Param {
                 Self::DOAANGLE => ParamConfig::int_n(21, 0, 359, 0, Access::ReadOnly, "DOA angle. Current value. Orientation depends on build configuration.", "[0 .. 359] Angle")
             }
         })[self.clone()]
+    }
+
+    pub fn sorted() -> Vec<Self> {
+        let mut params = Self::iter().collect::<Vec<_>>();
+        params.sort_by_key(|p| {
+            let config = p.config();
+            (
+                match config.access() {
+                    Access::ReadOnly => 1,
+                    Access::ReadWrite => 0,
+                },
+                match config {
+                    ParamConfig::IntMany(_) | ParamConfig::IntFew(_) => 0,
+                    ParamConfig::Float(_) => 1,
+                },
+            )
+        });
+        params
     }
 }
 

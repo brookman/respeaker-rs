@@ -1,14 +1,15 @@
-use std::{fs::File, path::PathBuf};
+use std::{collections::HashMap, fs::File, path::PathBuf};
 
 use csv::Writer;
-use eframe::egui::ahash::HashMap;
 use strum::IntoEnumIterator;
+use tracing::info;
 
 use crate::params::{Param, Value};
 
 pub fn write_csv(data: Vec<(f32, HashMap<Param, Value>)>, file_path: &PathBuf) -> eyre::Result<()> {
-    let params: Vec<Param> = Param::iter().collect();
+    info!("Writing CSV file '{file_path:?}' with {} lines", data.len());
 
+    let params: Vec<Param> = Param::iter().collect();
     let mut wtr = Writer::from_writer(File::create(file_path)?);
 
     let mut headers = vec!["timestamp".to_string()];

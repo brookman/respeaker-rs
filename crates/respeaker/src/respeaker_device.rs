@@ -158,7 +158,7 @@ impl ReSpeakerDevice {
         Ok(result)
     }
 
-    fn read_ro(&self) -> Result<HashMap<Param, Value>> {
+    pub fn read_ro(&self) -> Result<HashMap<Param, Value>> {
         let mut result = HashMap::new();
 
         for p in Param::iter().filter(|p| p.config().access() == Access::ReadOnly) {
@@ -317,6 +317,10 @@ impl ReSpeakerDevice {
             }
         }
         Ok(Table::new(rows).to_string())
+    }
+
+    pub fn params(&self) -> Arc<Mutex<ParamState>> {
+        self.param_state.clone()
     }
 }
 
