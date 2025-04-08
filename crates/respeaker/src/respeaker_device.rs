@@ -9,7 +9,7 @@ use tabled::{Table, Tabled};
 use tracing::info;
 
 use crate::params::{Access, Param, ParamConfig, Value};
-use eyre::{Result, bail};
+use eyre::{bail, Result};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 

@@ -2,6 +2,7 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
 use std::{
+    path::PathBuf,
     sync::{mpsc, Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
@@ -25,8 +26,8 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
-    let mut join_handle:Option<JoinHandle<eyre::Result<()>>> = None;
-    
+    let mut join_handle: Option<JoinHandle<eyre::Result<()>>> = None;
+
     let result = eframe::run_native(
         "Unofficial CLI & UI for the ReSpeaker Mic Array v2.0",
         options,
@@ -43,25 +44,36 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                     }
                     {
                         let mut state = state_arc.lock().unwrap();
-                        let params_indices_to_read = state.params.iter().enumerate().filter(|(_,(_,v))|match v {
+                        let params_indices_to_read = state.params.iter().enumerate()
+                        .filter(|(_,(_,v))|match v {
                             Value::Int(config, _) => config.access,
                             Value::Float(config, _) => config.access,
-                        } == Access::ReadOnly).map(|(i,_)|i).collect::<Vec<_>>();
-        
+                        } == Access::ReadOnly).map(|(i,_)|i)
+                        .collect::<Vec<_>>();
+
                         for i in params_indices_to_read {
-                            let config = state.params.get(i).ok_or_eyre("Param not available")?.0.config();
+                            let config = state
+                                .params
+                                .get(i)
+                                .ok_or_eyre("Param not available")?
+                                .0
+                                .config();
                             let new_value = state.device.read(config)?;
-                            state.params.get_mut(i).ok_or_eyre("Param not available")?.1 = new_value.clone();
-                            state.previous_params.get_mut(i).ok_or_eyre("Param not available")?.1 = new_value;
+                            state.params.get_mut(i).ok_or_eyre("Param not available")?.1 =
+                                new_value.clone();
+                            state
+                                .previous_params
+                                .get_mut(i)
+                                .ok_or_eyre("Param not available")?
+                                .1 = new_value;
                         }
                         state.ctx.request_repaint();
                     }
-        
+
                     thread::sleep(Duration::from_millis(50));
                 }
                 Ok(())
             }));
-        
 
             Ok(Box::new(ui_state))
         }),
@@ -78,7 +90,6 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
 }
 
 struct UiState {
-   
     state: Arc<Mutex<InnerUiState>>,
 }
 
@@ -87,6 +98,12 @@ struct InnerUiState {
     params: Vec<(Param, Value)>,
     previous_params: Vec<(Param, Value)>,
     device: ReSpeakerDevice,
+    recording_state: Option<RecordingState>,
+}
+
+struct RecordingState {
+    audio_file: PathBuf,
+    json_file: PathBuf,
 }
 
 impl UiState {
@@ -97,13 +114,14 @@ impl UiState {
                 params: vec![],
                 previous_params: vec![],
                 device,
+                recording_state: None,
             })),
         };
-        state.read_all_params()?;
+        state.update_all_params()?;
         Ok(state)
     }
 
-    fn read_all_params(&mut self) -> eyre::Result<()> {
+    fn update_all_params(&mut self) -> eyre::Result<()> {
         let mut state = self.state.lock().unwrap();
         let map = EnumMap::from_fn(|p: Param| {
             let config = p.config();
@@ -192,8 +210,15 @@ impl eframe::App for UiState {
                     let mut state = self.state.lock().unwrap();
                     state.device.reset().unwrap();
                 }
-                self.read_all_params().unwrap();
+                self.update_all_params().unwrap();
             }
+
+            // if ui.button("Record audio").clicked() {
+            //     {
+            //         let mut state = self.state.lock().unwrap();
+            //         state.device.reset().unwrap();
+            //     }
+            // }
         });
 
         {

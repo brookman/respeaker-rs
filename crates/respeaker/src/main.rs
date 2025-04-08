@@ -1,16 +1,20 @@
-use clap::{Parser, Subcommand, command};
+use std::path::PathBuf;
+
+use clap::{command, Parser, Subcommand};
+use eyre::eyre;
 use eyre::Ok;
 use eyre::Result;
-use eyre::eyre;
 use params::Param;
 use params::ParseValue;
+use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
-use tracing::Level;
 use tracing::info;
+use tracing::Level;
 use ui::run_ui;
 
 mod params;
+mod recorder;
 mod respeaker_device;
 mod ui;
 
@@ -36,6 +40,14 @@ enum Command {
     Write { param: Param, value: String },
     /// Perform a device reset
     Reset,
+    /// Record audio for the provided amount of seconds
+    Record {
+        seconds: f32,
+        wav_path: Option<PathBuf>,
+        /// Override the input device (mic) index. If not set the first Re-Speaker device will be used.
+        #[clap(short = 'm')]
+        mic_index: Option<usize>,
+    },
 }
 
 fn main() -> eyre::Result<()> {
@@ -61,6 +73,11 @@ fn main() -> eyre::Result<()> {
                 device.write(&param, &value)?;
             }
             Command::Reset => device.reset()?,
+            Command::Record {
+                seconds,
+                wav_path,
+                mic_index,
+            } => record_audio(seconds, wav_path, mic_index)?,
         }
     } else {
         info!("Opening UI...");
