@@ -2,14 +2,14 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
 use std::{
-    sync::{Arc, Mutex},
-    thread,
+    sync::{mpsc, Arc, Mutex},
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
 use eframe::egui;
 use enum_map::EnumMap;
-use eyre::eyre;
+use eyre::{eyre, OptionExt};
 use tracing::info;
 
 use crate::{
@@ -18,11 +18,16 @@ use crate::{
 };
 
 pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
-        let options = eframe::NativeOptions {
+    let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 1000.0]),
         ..Default::default()
     };
-    eframe::run_native(
+
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+
+    let mut join_handle:Option<JoinHandle<eyre::Result<()>>> = None;
+    
+    let result = eframe::run_native(
         "Unofficial CLI & UI for the ReSpeaker Mic Array v2.0",
         options,
         Box::new(|cc| {
@@ -30,8 +35,12 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
             let ui_state = UiState::new(ctx, device)?;
 
             let state_arc = ui_state.state.clone();
-            thread::spawn(move || {
+            join_handle = Some(thread::spawn(move || {
                 loop {
+                    if shutdown_rx.try_recv().is_ok() {
+                        info!("Refresh thread is shutting down");
+                        break;
+                    }
                     {
                         let mut state = state_arc.lock().unwrap();
                         let params_indices_to_read = state.params.iter().enumerate().filter(|(_,(_,v))|match v {
@@ -40,23 +49,32 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                         } == Access::ReadOnly).map(|(i,_)|i).collect::<Vec<_>>();
         
                         for i in params_indices_to_read {
-                            let config = state.params.get(i).unwrap().0.config();
-                            let new_value = state.device.read(config).unwrap();
-                            state.params.get_mut(i).unwrap().1 = new_value.clone();
-                            state.previous_params.get_mut(i).unwrap().1 = new_value;
+                            let config = state.params.get(i).ok_or_eyre("Param not available")?.0.config();
+                            let new_value = state.device.read(config)?;
+                            state.params.get_mut(i).ok_or_eyre("Param not available")?.1 = new_value.clone();
+                            state.previous_params.get_mut(i).ok_or_eyre("Param not available")?.1 = new_value;
                         }
                         state.ctx.request_repaint();
                     }
         
                     thread::sleep(Duration::from_millis(50));
                 }
-            });
+                Ok(())
+            }));
         
 
             Ok(Box::new(ui_state))
         }),
     )
-    .map_err(|e| eyre!("Ui error: {:?}", e))
+    .map_err(|e| eyre!("Ui error: {:?}", e));
+
+    shutdown_tx.send(())?;
+
+    if let Some(h) = join_handle {
+        h.join().unwrap();
+    }
+
+    result
 }
 
 struct UiState {
