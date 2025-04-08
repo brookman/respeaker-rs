@@ -3,14 +3,14 @@
 
 use std::{
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use eframe::egui;
 use enum_map::EnumMap;
-use eyre::{eyre, OptionExt};
+use eyre::{OptionExt, eyre};
 use tracing::info;
 
 use crate::{
@@ -33,7 +33,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
         options,
         Box::new(|cc| {
             let ctx = cc.egui_ctx.clone();
-            let ui_state = UiState::new(ctx, device)?;
+            let ui_state = UiState::new(device)?;
 
             let state_arc = ui_state.state.clone();
             join_handle = Some(thread::spawn(move || {
@@ -44,21 +44,17 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                     }
                     {
                         let mut state = state_arc.lock().unwrap();
-                        let params_indices_to_read = state.params.iter().enumerate()
-                        .filter(|(_,(_,v))|match v {
-                            Value::Int(config, _) => config.access,
-                            Value::Float(config, _) => config.access,
-                        } == Access::ReadOnly).map(|(i,_)|i)
-                        .collect::<Vec<_>>();
+                        let params_indices_to_read = state
+                            .params
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (p, _))| p.config().access() == Access::ReadOnly)
+                            .map(|(i, _)| i)
+                            .collect::<Vec<_>>();
 
                         for i in params_indices_to_read {
-                            let config = state
-                                .params
-                                .get(i)
-                                .ok_or_eyre("Param not available")?
-                                .0
-                                .config();
-                            let new_value = state.device.read(config)?;
+                            let param = state.params.get(i).ok_or_eyre("Param not available")?;
+                            let new_value = state.device.read(&param.0)?;
                             state.params.get_mut(i).ok_or_eyre("Param not available")?.1 =
                                 new_value.clone();
                             state
@@ -67,8 +63,8 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                                 .ok_or_eyre("Param not available")?
                                 .1 = new_value;
                         }
-                        state.ctx.request_repaint();
                     }
+                    ctx.request_repaint();
 
                     thread::sleep(Duration::from_millis(50));
                 }
@@ -94,27 +90,28 @@ struct UiState {
 }
 
 struct InnerUiState {
-    ctx: egui::Context,
     params: Vec<(Param, Value)>,
     previous_params: Vec<(Param, Value)>,
     device: ReSpeakerDevice,
-    recording_state: Option<RecordingState>,
+    recording_state: RecordingState,
 }
 
-struct RecordingState {
-    audio_file: PathBuf,
-    json_file: PathBuf,
+enum RecordingState {
+    Idle,
+    Recording {
+        audio_file: PathBuf,
+        json_file: PathBuf,
+    },
 }
 
 impl UiState {
-    fn new(ctx: egui::Context, device: ReSpeakerDevice) -> eyre::Result<Self> {
+    fn new(device: ReSpeakerDevice) -> eyre::Result<Self> {
         let mut state = Self {
             state: Arc::new(Mutex::new(InnerUiState {
-                ctx,
                 params: vec![],
                 previous_params: vec![],
                 device,
-                recording_state: None,
+                recording_state: RecordingState::Idle,
             })),
         };
         state.update_all_params()?;
@@ -123,10 +120,7 @@ impl UiState {
 
     fn update_all_params(&mut self) -> eyre::Result<()> {
         let mut state = self.state.lock().unwrap();
-        let map = EnumMap::from_fn(|p: Param| {
-            let config = p.config();
-            state.device.read(config).unwrap()
-        });
+        let map = EnumMap::from_fn(|p: Param| state.device.read(&p).unwrap());
         let mut params = map.into_iter().collect::<Vec<_>>();
         params.sort_by_key(|(_, value)| {
             (

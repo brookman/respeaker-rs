@@ -1,13 +1,13 @@
 use eyre::{Context, Result};
-use std::{fmt::Display, sync::OnceLock};
+use std::{collections::HashMap, fmt::Display, sync::OnceLock};
 
 use clap::ValueEnum;
-use enum_map::{enum_map, Enum, EnumMap};
+use enum_map::{Enum, EnumMap, enum_map};
 use strum_macros::EnumIter;
 
 #[allow(clippy::upper_case_acronyms)] // ReSpeaker API uses UPPERCASE
 #[allow(non_camel_case_types)] // ReSpeaker API uses UPPERCASE
-#[derive(Clone, Debug, Enum, ValueEnum, EnumIter, Hash)]
+#[derive(Clone, Debug, Enum, ValueEnum, EnumIter, Hash, PartialEq, Eq)]
 #[clap(rename_all = "verbatim")]
 pub enum Param {
     AECFREEZEONOFF,
@@ -219,6 +219,22 @@ impl ParamConfig {
             value_descriptions: vec![],
         })
     }
+
+    pub fn access(&self) -> Access {
+        match self {
+            ParamConfig::IntMany(config) => config.access,
+            ParamConfig::IntFew(config) => config.access,
+            ParamConfig::Float(config) => config.access,
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            ParamConfig::IntMany(config) => config.description.clone(),
+            ParamConfig::IntFew(config) => config.description.clone(),
+            ParamConfig::Float(config) => config.description.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,4 +298,8 @@ impl Display for Value {
             Self::Float(_, v) => f.write_str(&format!("{v}")),
         }
     }
+}
+
+pub struct ParamState {
+    pub current_params: HashMap<Param, Value>,
 }

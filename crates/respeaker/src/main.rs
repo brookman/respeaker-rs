@@ -1,18 +1,25 @@
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
-use clap::{command, Parser, Subcommand};
-use eyre::eyre;
+use clap::{Parser, Subcommand, command};
 use eyre::Ok;
 use eyre::Result;
+use eyre::eyre;
 use params::Param;
+use params::ParamState;
 use params::ParseValue;
+use params::Value;
 use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 use ui::run_ui;
 
+mod csv;
 mod params;
 mod recorder;
 mod respeaker_device;
@@ -50,12 +57,17 @@ enum Command {
     },
 }
 
+
 fn main() -> eyre::Result<()> {
     let args: Arguments = init()?;
 
     info!("Running unofficial ReSpeaker CLI with {args:?}");
 
-    let mut device = ReSpeakerDevice::open(args.device_index)?;
+    let shared_state = Arc::new(Mutex::new(ParamState {
+        current_params: HashMap::new(),
+    }));
+
+    let mut device = ReSpeakerDevice::open(args.device_index, shared_state.clone())?;
 
     if let Some(command) = args.command {
         match command {
@@ -64,8 +76,7 @@ fn main() -> eyre::Result<()> {
                 info!("Parameters:\n{list}");
             }
             Command::Read { param } => {
-                let config = param.config();
-                let value = device.read(config)?;
+                let value = device.read(&param)?;
                 info!("\n{param:?}={value}");
             }
             Command::Write { param, value } => {

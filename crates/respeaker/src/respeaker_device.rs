@@ -1,4 +1,6 @@
 use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -8,8 +10,8 @@ use strum::IntoEnumIterator;
 use tabled::{Table, Tabled};
 use tracing::info;
 
-use crate::params::{Access, Param, ParamConfig, Value};
-use eyre::{bail, Result};
+use crate::params::{Access, Param, ParamConfig, ParamState, Value};
+use eyre::{OptionExt, Result, bail};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -17,11 +19,16 @@ pub struct ReSpeakerDevice {
     index: usize,
     handle: DeviceHandle<GlobalContext>,
     interface_number: u8,
+    param_state: Arc<Mutex<ParamState>>,
 }
 
 impl ReSpeakerDevice {
-    pub fn open(device_index: Option<usize>) -> Result<Self> {
-        fn open_internal(index: usize, device: &Device<GlobalContext>) -> Result<ReSpeakerDevice> {
+    pub fn open(device_index: Option<usize>, param_state: Arc<Mutex<ParamState>>) -> Result<Self> {
+        fn open_internal(
+            index: usize,
+            device: &Device<GlobalContext>,
+            param_state: Arc<Mutex<ParamState>>,
+        ) -> Result<ReSpeakerDevice> {
             let handle = device.open()?;
 
             let config_desc = device.active_config_descriptor()?;
@@ -35,6 +42,7 @@ impl ReSpeakerDevice {
                             index,
                             handle,
                             interface_number,
+                            param_state,
                         });
                     }
                 }
@@ -66,7 +74,7 @@ impl ReSpeakerDevice {
         }
         if let Some(i) = device_index {
             if let Some(d) = devices.get(i) {
-                return open_internal(i, d);
+                return open_internal(i, d, param_state);
             }
             bail!(
                 "Device index (-i argument) out of range. Index was {i} but {} devices found.",
@@ -74,7 +82,7 @@ impl ReSpeakerDevice {
             );
         }
         if devices.len() == 1 {
-            return open_internal(0, &devices[0]);
+            return open_internal(0, &devices[0], param_state);
         }
         if devices.len() > 1 {
             bail!("Multiple devices found. Specify the a device index with -i.")
@@ -83,7 +91,17 @@ impl ReSpeakerDevice {
         bail!("No devices found")
     }
 
-    pub fn read(&self, param_config: &ParamConfig) -> Result<Value> {
+    pub fn read(&self, param: &Param) -> Result<Value> {
+        let param_config = param.config();
+        let value = self.read_internal(param_config)?;
+        {
+            let mut params = self.param_state.lock().unwrap();
+            params.current_params.insert(param.clone(), value.clone());
+        }
+        Ok(value)
+    }
+
+    fn read_internal(&self, param_config: &ParamConfig) -> Result<Value> {
         let start = Instant::now();
         let (is_int, id, cmd) = match param_config {
             ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
@@ -127,6 +145,28 @@ impl ReSpeakerDevice {
             }
             unreachable!();
         }
+    }
+
+    fn read_all(&self) -> Result<HashMap<Param, Value>> {
+        let mut result = HashMap::new();
+
+        for p in Param::iter() {
+            let value = self.read(&p)?;
+            result.insert(p, value);
+        }
+
+        Ok(result)
+    }
+
+    fn read_ro(&self) -> Result<HashMap<Param, Value>> {
+        let mut result = HashMap::new();
+
+        for p in Param::iter().filter(|p| p.config().access() == Access::ReadOnly) {
+            let value = self.read(&p)?;
+            result.insert(p, value);
+        }
+
+        Ok(result)
     }
 
     pub fn write(&self, param: &Param, value: &Value) -> Result<()> {
@@ -200,6 +240,11 @@ impl ReSpeakerDevice {
 
         info!("Wrote value {value} to param {:?} successfully", param);
 
+        {
+            let mut params = self.param_state.lock().unwrap();
+            params.current_params.insert(param.clone(), value.clone());
+        }
+
         Ok(())
     }
 
@@ -229,20 +274,21 @@ impl ReSpeakerDevice {
         info!("Reset was successfull.");
         thread::sleep(Duration::from_secs(2));
 
-        *self = Self::open(Some(self.index))?;
+        *self = Self::open(Some(self.index), self.param_state.clone())?;
 
         Ok(())
     }
 
     pub fn list(&self) -> Result<String> {
+        let param_map = self.read_all()?;
         let mut rows = vec![];
         for p in Param::iter() {
             let config = p.config();
-            let value = self.read(config)?;
+            let value = param_map.get(&p).ok_or_eyre("Param not found")?;
             match config {
                 ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => rows.push(TableRow {
                     name: format!("{p:?}"),
-                    value,
+                    value: value.clone(),
                     t: "int".to_string(),
                     access: if config.access == Access::ReadOnly {
                         "ro"
@@ -256,7 +302,7 @@ impl ReSpeakerDevice {
                 }),
                 ParamConfig::Float(config) => rows.push(TableRow {
                     name: format!("{p:?}"),
-                    value,
+                    value: value.clone(),
                     t: "float".to_string(),
                     access: if config.access == Access::ReadOnly {
                         "ro"
