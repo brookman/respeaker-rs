@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fs::File, path::PathBuf};
 
 use csv::Writer;
-use strum::IntoEnumIterator;
 use tracing::info;
 
 use crate::params::{Param, Value};

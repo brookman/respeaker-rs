@@ -1,5 +1,5 @@
 use eyre::{Context, Result};
-use std::{collections::HashMap, fmt::Display, path::Iter, sync::OnceLock};
+use std::{collections::HashMap, fmt::Display, sync::OnceLock};
 use strum::IntoEnumIterator;
 
 use clap::ValueEnum;
@@ -239,21 +239,19 @@ impl ParamConfig {
         })
     }
 
-    pub fn access(&self) -> Access {
+    pub const fn access(&self) -> Access {
         match self {
-            ParamConfig::IntMany(config) => config.access,
-            ParamConfig::IntFew(config) => config.access,
-            ParamConfig::Float(config) => config.access,
+            Self::IntFew(config) | Self::IntMany(config) => config.access,
+            Self::Float(config) => config.access,
         }
     }
 
-    pub fn description(&self) -> String {
-        match self {
-            ParamConfig::IntMany(config) => config.description.clone(),
-            ParamConfig::IntFew(config) => config.description.clone(),
-            ParamConfig::Float(config) => config.description.clone(),
-        }
-    }
+    // pub fn description(&self) -> String {
+    //     match self {
+    //         Self::IntFew(config) | Self::IntMany(config) => config.description.clone(),
+    //         Self::Float(config) => config.description.clone(),
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

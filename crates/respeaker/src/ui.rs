@@ -3,7 +3,6 @@
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
@@ -80,7 +79,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
     shutdown_tx.send(())?;
 
     if let Some(h) = join_handle {
-        h.join().unwrap();
+        h.join().unwrap().unwrap();
     }
 
     result
@@ -94,15 +93,6 @@ struct UiState {
 struct InnerUiState {
     params: HashMap<Param, Value>,
     previous_params: HashMap<Param, Value>,
-    recording_state: RecordingState,
-}
-
-enum RecordingState {
-    Idle,
-    Recording {
-        audio_file: PathBuf,
-        json_file: PathBuf,
-    },
 }
 
 impl UiState {
@@ -112,7 +102,6 @@ impl UiState {
             state: Arc::new(Mutex::new(InnerUiState {
                 params: HashMap::new(),
                 previous_params: HashMap::new(),
-                recording_state: RecordingState::Idle,
             })),
         };
         state.update_all_params()?;

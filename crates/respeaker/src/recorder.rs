@@ -150,9 +150,9 @@ pub fn record_audio(
 
 #[derive(Debug)]
 pub struct AudioChunk {
-    pub channels: u16,
-    pub bits_per_sample: u16,
-    pub sample_rate: u32,
+    // pub channels: u16,
+    // pub bits_per_sample: u16,
+    // pub sample_rate: u32,
     pub samples: Samples,
 }
 
@@ -165,8 +165,8 @@ pub enum Samples {
 impl Samples {
     fn len(&self) -> usize {
         match self {
-            Samples::F32(items) => items.len(),
-            Samples::I16(items) => items.len(),
+            Self::F32(items) => items.len(),
+            Self::I16(items) => items.len(),
         }
     }
 }
@@ -195,9 +195,9 @@ fn build_input_stream_f32(
         config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             let chunk = AudioChunk {
-                channels,
-                bits_per_sample: 32,
-                sample_rate,
+                // channels,
+                // bits_per_sample: 32,
+                // sample_rate,
                 samples: Samples::F32(data.to_vec()),
             };
             trace!("Got audio chunk of length {}", chunk.samples.len());
@@ -233,9 +233,9 @@ fn build_input_stream_i16(
         config,
         move |data: &[i16], _: &cpal::InputCallbackInfo| {
             let chunk = AudioChunk {
-                channels,
-                bits_per_sample: 16,
-                sample_rate,
+                // channels,
+                // bits_per_sample: 16,
+                // sample_rate,
                 samples: Samples::I16(data.to_vec()),
             };
             trace!("Got audio chunk of length {}", chunk.samples.len());
