@@ -65,8 +65,9 @@ pub fn record_audio(
     let (tx, rx) = mpsc::channel();
 
     let (number_of_samples_to_record, spec, stream) = match sample_format {
-        cpal::SampleFormat::F32 => build_input_stream(seconds_to_record, mic, &config, tx),
-        _ => bail!("Only supporting F32 sample format for now"),
+        cpal::SampleFormat::I16 => build_input_stream_i16(seconds_to_record, mic, &config, tx),
+        cpal::SampleFormat::F32 => build_input_stream_f32(seconds_to_record, mic, &config, tx),
+        _ => bail!("Only supporting I16 or 32 sample format for now"),
     }?;
 
     let dir = PathBuf::from("./recordings");
@@ -75,8 +76,8 @@ pub fn record_audio(
     }
     let creation_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
-    let wav_path = wav_path
-        .unwrap_or_else(|| PathBuf::from(format!("./recordings/{creation_time}.wav")));
+    let wav_path =
+        wav_path.unwrap_or_else(|| PathBuf::from(format!("./recordings/{creation_time}.wav")));
     let mut writer = hound::WavWriter::create(&wav_path, spec)?;
     let mut number_of_samples_written = 0;
 
@@ -113,9 +114,19 @@ pub fn record_audio(
     loop {
         if let Ok(chunk) = rx.recv() {
             let len = chunk.samples.len();
-            for s in chunk.samples {
-                writer.write_sample(s)?;
+            match chunk.samples {
+                Samples::F32(samples) => {
+                    for s in samples {
+                        writer.write_sample(s)?;
+                    }
+                }
+                Samples::I16(samples) => {
+                    for s in samples {
+                        writer.write_sample(s)?;
+                    }
+                }
             }
+
             number_of_samples_written += len;
 
             if number_of_samples_written >= number_of_samples_to_record {
@@ -140,11 +151,27 @@ pub fn record_audio(
 #[derive(Debug)]
 pub struct AudioChunk {
     pub channels: u16,
+    pub bits_per_sample: u16,
     pub sample_rate: u32,
-    pub samples: Vec<f32>,
+    pub samples: Samples,
 }
 
-fn build_input_stream(
+#[derive(Debug)]
+pub enum Samples {
+    F32(Vec<f32>),
+    I16(Vec<i16>),
+}
+
+impl Samples {
+    fn len(&self) -> usize {
+        match self {
+            Samples::F32(items) => items.len(),
+            Samples::I16(items) => items.len(),
+        }
+    }
+}
+
+fn build_input_stream_f32(
     seconds_to_record: f32,
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -169,8 +196,47 @@ fn build_input_stream(
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
             let chunk = AudioChunk {
                 channels,
+                bits_per_sample: 32,
                 sample_rate,
-                samples: data.to_vec(),
+                samples: Samples::F32(data.to_vec()),
+            };
+            trace!("Got audio chunk of length {}", chunk.samples.len());
+            tx.send(chunk).unwrap();
+        },
+        err_fn,
+        None,
+    )?;
+    Ok((number_of_samples_to_record, spec, stream))
+}
+
+fn build_input_stream_i16(
+    seconds_to_record: f32,
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    tx: Sender<AudioChunk>,
+) -> eyre::Result<(usize, hound::WavSpec, cpal::Stream)> {
+    let sample_rate = config.sample_rate.0;
+    let channels = config.channels;
+    let number_of_samples_to_record =
+        (sample_rate as f32 * seconds_to_record * channels as f32) as usize;
+
+    let err_fn = |err| error!("Stream error: {err}");
+
+    let spec = hound::WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let stream = device.build_input_stream(
+        config,
+        move |data: &[i16], _: &cpal::InputCallbackInfo| {
+            let chunk = AudioChunk {
+                channels,
+                bits_per_sample: 16,
+                sample_rate,
+                samples: Samples::I16(data.to_vec()),
             };
             trace!("Got audio chunk of length {}", chunk.samples.len());
             tx.send(chunk).unwrap();
