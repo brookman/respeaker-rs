@@ -22,7 +22,11 @@ pub fn record_respeaker_parameters(
 ) -> eyre::Result<()> {
     let mut csv_data: Vec<(f32, HashMap<ParamKind, Value>)> = vec![];
     let start = Instant::now();
-    while start.elapsed().as_secs_f32() > seconds_to_record {
+    loop {
+        if start.elapsed().as_secs_f32() > seconds_to_record {
+            break;
+        }
+
         device.read_ro()?; // update readonly values
         let params = {
             let params = device

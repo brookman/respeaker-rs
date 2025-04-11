@@ -126,6 +126,7 @@ impl ReSpeakerDevice {
         info!("Read parameter {:?} in {:?}", param, start.elapsed());
 
         Ok(if def.param_type.is_int() {
+            #[allow(clippy::cast_sign_loss)]
             Value::Int(response.0 as usize)
         } else {
             #[allow(clippy::cast_possible_truncation)]
@@ -169,6 +170,7 @@ impl ReSpeakerDevice {
                     if value < &min || value > &max {
                         bail!("Value {value} is not in range {}..={}", min, max);
                     }
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     ((*value as i32).to_le_bytes(), 1i32.to_le_bytes())
                 }
                 Value::Float(_) => {
