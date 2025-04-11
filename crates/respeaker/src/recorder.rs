@@ -101,7 +101,12 @@ pub fn record_audio(
 
                 device.read_ro()?; // update readonly values
                 let params = {
-                    let params = device.params().lock().unwrap().current_params.clone();
+                    let params = device
+                        .params()
+                        .lock()
+                        .expect("Lock failed")
+                        .current_params
+                        .clone();
                     params
                 };
 

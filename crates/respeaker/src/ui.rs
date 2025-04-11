@@ -9,8 +9,8 @@ use std::{
 };
 
 use eframe::egui;
-use eyre::{eyre, OptionExt};
-use tracing::info;
+use eyre::{eyre, Ok, OptionExt};
+use tracing::{error, info};
 
 use crate::{
     params::{Access, ParamKind, ParamType, Value},
@@ -43,14 +43,14 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                         break;
                     }
                     {
-                        let mut state = state_arc.lock().unwrap();
+                        let mut state = state_arc.lock().expect("Lock failed");
 
                         for param in ParamKind::sorted()
                             .iter()
                             .filter(|p| p.def().access == Access::ReadOnly)
                         {
                             let new_value = {
-                                let device = device_arc.lock().unwrap();
+                                let device = device_arc.lock().expect("Lock failed");
                                 device.read(param)?
                             };
 
@@ -71,7 +71,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                 Ok(())
             }));
 
-            Ok(Box::new(ui_state))
+            std::result::Result::Ok(Box::new(ui_state))
         }),
     )
     .map_err(|e| eyre!("Ui error: {:?}", e));
@@ -79,7 +79,16 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
     shutdown_tx.send(())?;
 
     if let Some(h) = join_handle {
-        h.join().unwrap().unwrap();
+        match h.join() {
+            Err(e) => {
+                error!("Error during while joining UI thread: {e:?}");
+            }
+            std::result::Result::Ok(res) => {
+                if let Err(e) = res {
+                    error!("UI error: {e:?}");
+                }
+            }
+        }
     }
 
     result
@@ -113,7 +122,7 @@ impl UiState {
             .into_iter()
             .map(|p| {
                 let value = {
-                    let device = self.device.lock().unwrap();
+                    let device = self.device.lock().expect("Lock failed");
                     device.read(&p)?
                 };
                 Ok((p, value))
@@ -121,7 +130,7 @@ impl UiState {
             .collect::<eyre::Result<HashMap<_, _>>>()?;
 
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().expect("Lock failed");
             state.params.clone_from(&params);
             state.previous_params = params;
         }
@@ -132,96 +141,110 @@ impl UiState {
 
 impl eframe::App for UiState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
-            egui::Grid::new("Parameter grid").show(ui, |ui| {
-                for param in ParamKind::sorted() {
-                    let def = param.def();
-                    let mut state = self.state.lock().unwrap();
-                    let value = state.params.get_mut(&param).unwrap();
+        if let Err(e) = update_internal(self, ctx) {
+            error!("Error during UI update: {e:?}");
+        }
+    }
+}
 
-                    ui.label(format!("{param:?}"));
-                    match value {
-                        Value::Int(i) => {
-                            ui.horizontal(|ui| match def.param_type {
-                                ParamType::IntRange { min, max } => {
-                                    ui.add_enabled(
-                                        def.access == Access::ReadWrite,
-                                        egui::Slider::new(i, min..=max)
-                                            .text(format!("{min}..={max}")),
-                                    );
-                                }
-                                ParamType::IntDiscete { min: _, max: _ } => {
-                                    if def.access == Access::ReadWrite {
-                                        egui::ComboBox::from_id_salt(param)
-                                            .selected_text(def.value_descriptions[*i as usize])
-                                            .show_ui(ui, |ui| {
-                                                for (e, v) in
-                                                    def.value_descriptions.iter().enumerate()
-                                                {
-                                                    ui.selectable_value(i, e as i32, *v);
-                                                }
-                                            });
-                                    } else {
-                                        ui.label(def.value_descriptions[*i as usize]);
+fn update_internal(ui_state: &UiState, ctx: &egui::Context) -> eyre::Result<()> {
+    egui::CentralPanel::default()
+        .show(ctx, |ui| {
+            ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
+            egui::Grid::new("Parameter grid")
+                .show(ui, |ui| {
+                    for param in ParamKind::sorted() {
+                        let def = param.def();
+                        let mut state = ui_state.state.lock().expect("Lock failed");
+                        let value = state.params.get_mut(&param).ok_or_eyre("Param not found")?;
+
+                        ui.label(format!("{param:?}"));
+                        match value {
+                            Value::Int(i) => {
+                                ui.horizontal(|ui| match def.param_type {
+                                    ParamType::IntRange { min, max } => {
+                                        ui.add_enabled(
+                                            def.access == Access::ReadWrite,
+                                            egui::Slider::new(i, min..=max)
+                                                .text(format!("{min}..={max}")),
+                                        );
                                     }
-                                }
-                                _ => unreachable!(),
-                            });
-                            ui.label(def.description);
-                        }
-                        Value::Float(f) => match def.param_type {
-                            ParamType::FloatRange { min, max } => {
-                                ui.horizontal(|ui| {
-                                    ui.add_enabled(
-                                        def.access == Access::ReadWrite,
-                                        egui::Slider::new(f, min..=max)
-                                            .text(format!("{min}..={max}")),
-                                    );
+                                    ParamType::IntDiscete { min: _, max: _ } => {
+                                        if def.access == Access::ReadWrite {
+                                            egui::ComboBox::from_id_salt(param)
+                                                .selected_text(def.value_descriptions[*i])
+                                                .show_ui(ui, |ui| {
+                                                    for (e, v) in
+                                                        def.value_descriptions.iter().enumerate()
+                                                    {
+                                                        ui.selectable_value(i, e, *v);
+                                                    }
+                                                });
+                                        } else {
+                                            ui.label(def.value_descriptions[*i]);
+                                        }
+                                    }
+                                    ParamType::FloatRange { min: _, max: _ } => unreachable!(),
                                 });
                                 ui.label(def.description);
                             }
-                            _ => unreachable!(),
-                        },
+                            Value::Float(f) => match def.param_type {
+                                ParamType::FloatRange { min, max } => {
+                                    ui.horizontal(|ui| {
+                                        ui.add_enabled(
+                                            def.access == Access::ReadWrite,
+                                            egui::Slider::new(f, min..=max)
+                                                .text(format!("{min}..={max}")),
+                                        );
+                                    });
+                                    ui.label(def.description);
+                                }
+                                _ => unreachable!(),
+                            },
+                        }
+                        ui.end_row();
                     }
-                    ui.end_row();
-                }
-            });
+                    Ok(())
+                })
+                .inner?;
             if ui.button("Reset device").clicked() {
                 {
-                    let mut device = self.device.lock().unwrap();
-                    device.reset().unwrap();
+                    let mut device = ui_state.device.lock().expect("Lock failed");
+                    device.reset()?;
                 }
-                self.update_all_params().unwrap();
+                ui_state.update_all_params()?;
             }
 
             // if ui.button("Record audio").clicked() {
             //     {
-            //         let mut state = self.state.lock().unwrap();
+            //         let mut state = self.state.lock().expect("Lock failed");
             //         state.device.reset().unwrap();
             //     }
             // }
-        });
+            Ok(())
+        })
+        .inner?;
 
-        {
-            let mut state = self.state.lock().unwrap();
+    {
+        let mut state = ui_state.state.lock().expect("Lock failed");
 
-            let mut any_changes = false;
-            for ((p, new), (_, old)) in &mut state.params.iter().zip(state.previous_params.iter()) {
-                if new != old {
-                    info!("Value has changed: {p:?}, old={}, new={}", old, new);
+        let mut any_changes = false;
+        for ((p, new), (_, old)) in &mut state.params.iter().zip(state.previous_params.iter()) {
+            if new != old {
+                info!("Value has changed: {p:?}, old={}, new={}", old, new);
 
-                    {
-                        let device = self.device.lock().unwrap();
-                        device.write(p, &new).unwrap();
-                    }
-
-                    any_changes = true;
+                {
+                    let device = ui_state.device.lock().expect("Lock failed");
+                    device.write(p, new)?;
                 }
-            }
-            if any_changes {
-                state.previous_params = state.params.clone();
+
+                any_changes = true;
             }
         }
+        if any_changes {
+            state.previous_params = state.params.clone();
+        }
     }
+
+    Ok(())
 }

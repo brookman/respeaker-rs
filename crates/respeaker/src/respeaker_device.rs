@@ -94,7 +94,7 @@ impl ReSpeakerDevice {
     pub fn read(&self, param: &ParamKind) -> Result<Value> {
         let value = self.read_internal(param)?;
         {
-            let mut params = self.param_state.lock().unwrap();
+            let mut params = self.param_state.lock().expect("Lock failed");
             params.current_params.insert(param.clone(), value.clone());
         }
         Ok(value)
@@ -126,7 +126,7 @@ impl ReSpeakerDevice {
         info!("Read parameter {:?} in {:?}", param, start.elapsed());
 
         Ok(if def.param_type.is_int() {
-            Value::Int(response.0)
+            Value::Int(response.0 as usize)
         } else {
             #[allow(clippy::cast_possible_truncation)]
             let float = (f64::from(response.0) * f64::from(response.1).exp2()) as f32;
@@ -169,7 +169,7 @@ impl ReSpeakerDevice {
                     if value < &min || value > &max {
                         bail!("Value {value} is not in range {}..={}", min, max);
                     }
-                    (value.to_le_bytes(), 1i32.to_le_bytes())
+                    ((*value as i32).to_le_bytes(), 1i32.to_le_bytes())
                 }
                 Value::Float(_) => {
                     bail!("Parameter type and value mismatch. Value must be i32 but was f32");
@@ -207,7 +207,7 @@ impl ReSpeakerDevice {
         info!("Wrote value {value} to param {:?} successfully", param);
 
         {
-            let mut params = self.param_state.lock().unwrap();
+            let mut params = self.param_state.lock().expect("Lock failed");
             params.current_params.insert(param.clone(), value.clone());
         }
 
