@@ -37,15 +37,16 @@ struct Arguments {
 #[derive(Subcommand, Debug)]
 #[clap(flatten_help = true)]
 enum Command {
-    /// List all available parameters and their current values (RW and RO)
+    /// List all available parameters and their current values (RW and RO).
     List,
-    /// Read the value of a specific parameter
+    /// Read the value of a specific parameter.
     Read { param: ParamKind },
-    /// Write the value of a specific parameter
+    /// Write the value of a specific parameter.
     Write { param: ParamKind, value: String },
-    /// Perform a device reset
+    /// Perform a device reset.
     Reset,
-    /// Record parameters to CSV for the provided amount of seconds
+    /// Continously record parameters to CSV file during the provided amount of seconds.
+    /// The RW parameters are only read once at the start.
     Record {
         seconds: f32,
         csv_path: Option<PathBuf>,
@@ -78,12 +79,8 @@ fn main() -> eyre::Result<()> {
                 device.write(&param, &value)?;
             }
             Command::Reset => device.reset()?,
-            Command::Record {
-                seconds,
-                csv_path,
-                //  mic_index,
-            } => {
-                device.list()?; // read all params into cache initially
+            Command::Record { seconds, csv_path } => {
+                device.list()?; // cache rw params
                 record_respeaker_parameters(seconds, csv_path, &device)?;
             }
         }

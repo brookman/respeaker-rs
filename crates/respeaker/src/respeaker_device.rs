@@ -17,7 +17,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct ReSpeakerDevice {
     index: usize,
-    handle: DeviceHandle<GlobalContext>,
+    handle: Arc<Mutex<DeviceHandle<GlobalContext>>>,
     interface_number: u8,
     param_state: Arc<Mutex<ParamState>>,
 }
@@ -29,7 +29,7 @@ impl ReSpeakerDevice {
             device: &Device<GlobalContext>,
             param_state: Arc<Mutex<ParamState>>,
         ) -> Result<ReSpeakerDevice> {
-            let handle = device.open()?;
+            let handle = Arc::new(Mutex::new(device.open()?));
 
             let config_desc = device.active_config_descriptor()?;
             for interface in config_desc.interfaces() {
@@ -117,8 +117,17 @@ impl ReSpeakerDevice {
             rusb::Recipient::Device,
         );
 
-        self.handle
-            .read_control(request_type, 0, cmd, def.id, &mut buffer, TIMEOUT)?;
+        {
+            self.handle.lock().expect("Lock failed").read_control(
+                request_type,
+                0,
+                cmd,
+                def.id,
+                &mut buffer,
+                TIMEOUT,
+            )?;
+        }
+
         let response = (
             i32::from_le_bytes(buffer[0..4].try_into()?),
             i32::from_le_bytes(buffer[4..8].try_into()?),
@@ -203,8 +212,16 @@ impl ReSpeakerDevice {
             rusb::Recipient::Device,
         );
 
-        self.handle
-            .write_control(request_type, 0, 0, def.id, &payload, TIMEOUT)?;
+        {
+            self.handle.lock().expect("Lock failed").write_control(
+                request_type,
+                0,
+                0,
+                def.id,
+                &payload,
+                TIMEOUT,
+            )?;
+        }
 
         info!("Wrote value {value} to param {:?} successfully", param);
 
@@ -226,20 +243,25 @@ impl ReSpeakerDevice {
             rusb::Recipient::Interface,
         );
 
-        self.handle.claim_interface(self.interface_number)?;
+        {
+            let handle = self.handle.lock().expect("Lock failed");
 
-        self.handle.write_control(
-            request_type,
-            XMOS_DFU_RESETDEVICE,
-            0,
-            u16::from(self.interface_number),
-            &[],
-            TIMEOUT,
-        )?;
+            handle.claim_interface(self.interface_number)?;
 
-        self.handle.release_interface(self.interface_number)?;
+            handle.write_control(
+                request_type,
+                XMOS_DFU_RESETDEVICE,
+                0,
+                u16::from(self.interface_number),
+                &[],
+                TIMEOUT,
+            )?;
 
-        info!("Reset was successfull.");
+            handle.release_interface(self.interface_number)?;
+        }
+
+        info!("Reset was successfull. Waiting 2 s before re-opening...");
+
         thread::sleep(Duration::from_secs(2));
 
         *self = Self::open(Some(self.index), self.param_state.clone())?;

@@ -247,6 +247,7 @@ const fn float_range(
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ParamState {
     pub current_params: HashMap<ParamKind, Value>,
 }

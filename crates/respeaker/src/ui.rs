@@ -2,7 +2,6 @@
 #![allow(rustdoc::missing_crate_level_docs)] // it's an example
 
 use std::{
-    collections::HashMap,
     sync::{mpsc, Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
@@ -18,6 +17,9 @@ use crate::{
 };
 
 pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
+    let device = Arc::new(Mutex::new(device));
+    let ui_state = UiState::new(device.clone())?;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 1000.0]),
         ..Default::default()
@@ -32,10 +34,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
         options,
         Box::new(|cc| {
             let ctx = cc.egui_ctx.clone();
-            let ui_state = UiState::new(device)?;
 
-            let device_arc = ui_state.device.clone();
-            let state_arc = ui_state.state.clone();
             join_handle = Some(thread::spawn(move || {
                 loop {
                     if shutdown_rx.try_recv().is_ok() {
@@ -43,26 +42,8 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                         break;
                     }
                     {
-                        let mut state = state_arc.lock().expect("Lock failed");
-
-                        for param in ParamKind::sorted()
-                            .iter()
-                            .filter(|p| p.def().access == Access::ReadOnly)
-                        {
-                            let new_value = {
-                                let device = device_arc.lock().expect("Lock failed");
-                                device.read(param)?
-                            };
-
-                            *state
-                                .params
-                                .get_mut(param)
-                                .ok_or_eyre("Param not available")? = new_value.clone();
-                            *state
-                                .previous_params
-                                .get_mut(param)
-                                .ok_or_eyre("Param not available")? = new_value;
-                        }
+                        let device = device.lock().expect("Lock failed");
+                        device.read_ro()?;
                     }
                     ctx.request_repaint();
 
@@ -96,46 +77,12 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
 
 struct UiState {
     device: Arc<Mutex<ReSpeakerDevice>>,
-    state: Arc<Mutex<InnerUiState>>,
-}
-
-struct InnerUiState {
-    params: HashMap<ParamKind, Value>,
-    previous_params: HashMap<ParamKind, Value>,
 }
 
 impl UiState {
-    fn new(device: ReSpeakerDevice) -> eyre::Result<Self> {
-        let state = Self {
-            device: Arc::new(Mutex::new(device)),
-            state: Arc::new(Mutex::new(InnerUiState {
-                params: HashMap::new(),
-                previous_params: HashMap::new(),
-            })),
-        };
-        state.update_all_params()?;
-        Ok(state)
-    }
-
-    fn update_all_params(&self) -> eyre::Result<()> {
-        let params = ParamKind::sorted()
-            .into_iter()
-            .map(|p| {
-                let value = {
-                    let device = self.device.lock().expect("Lock failed");
-                    device.read(&p)?
-                };
-                Ok((p, value))
-            })
-            .collect::<eyre::Result<HashMap<_, _>>>()?;
-
-        {
-            let mut state = self.state.lock().expect("Lock failed");
-            state.params.clone_from(&params);
-            state.previous_params = params;
-        }
-
-        Ok(())
+    fn new(device: Arc<Mutex<ReSpeakerDevice>>) -> eyre::Result<Self> {
+        device.lock().expect("Lock failed").list()?;
+        Ok(Self { device })
     }
 }
 
@@ -148,6 +95,18 @@ impl eframe::App for UiState {
 }
 
 fn update_internal(ui_state: &UiState, ctx: &egui::Context) -> eyre::Result<()> {
+    let mut params = {
+        ui_state
+            .device
+            .lock()
+            .expect("Lock failed")
+            .params()
+            .lock()
+            .expect("Lock failed")
+            .clone()
+    };
+    let params_cloned = params.clone();
+
     egui::CentralPanel::default()
         .show(ctx, |ui| {
             ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
@@ -155,8 +114,10 @@ fn update_internal(ui_state: &UiState, ctx: &egui::Context) -> eyre::Result<()> 
                 .show(ui, |ui| {
                     for param in ParamKind::sorted() {
                         let def = param.def();
-                        let mut state = ui_state.state.lock().expect("Lock failed");
-                        let value = state.params.get_mut(&param).ok_or_eyre("Param not found")?;
+                        let value = params
+                            .current_params
+                            .get_mut(&param)
+                            .ok_or_eyre("Param not found")?;
 
                         ui.label(format!("{param:?}"));
                         match value {
@@ -211,11 +172,11 @@ fn update_internal(ui_state: &UiState, ctx: &egui::Context) -> eyre::Result<()> 
                 {
                     let mut device = ui_state.device.lock().expect("Lock failed");
                     device.reset()?;
+                    device.list()?;
                 }
-                ui_state.update_all_params()?;
             }
 
-            // if ui.button("Record audio").clicked() {
+            // if ui.button("Record CSV").clicked() {
             //     {
             //         let mut state = self.state.lock().expect("Lock failed");
             //         state.device.reset().unwrap();
@@ -225,26 +186,19 @@ fn update_internal(ui_state: &UiState, ctx: &egui::Context) -> eyre::Result<()> 
         })
         .inner?;
 
+    for ((p, new), (_, old)) in &mut params
+        .current_params
+        .iter()
+        .zip(params_cloned.current_params.iter())
     {
-        let mut state = ui_state.state.lock().expect("Lock failed");
+        if new != old {
+            info!("Value has changed: {p:?}, old={}, new={}", old, new);
 
-        let mut any_changes = false;
-        for ((p, new), (_, old)) in &mut state.params.iter().zip(state.previous_params.iter()) {
-            if new != old {
-                info!("Value has changed: {p:?}, old={}, new={}", old, new);
-
-                {
-                    let device = ui_state.device.lock().expect("Lock failed");
-                    device.write(p, new)?;
-                }
-
-                any_changes = true;
+            {
+                let device = ui_state.device.lock().expect("Lock failed");
+                device.write(p, new)?;
             }
         }
-        if any_changes {
-            state.previous_params = state.params.clone();
-        }
     }
-
     Ok(())
 }
