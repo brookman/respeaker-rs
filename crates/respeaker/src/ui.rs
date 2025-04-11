@@ -3,17 +3,17 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, mpsc},
+    sync::{mpsc, Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use eframe::egui;
-use eyre::{OptionExt, eyre};
+use eyre::{eyre, OptionExt};
 use tracing::info;
 
 use crate::{
-    params::{Access, Param, ParamConfig, Value},
+    params::{Access, ParamKind, ParamType, Value},
     respeaker_device::ReSpeakerDevice,
 };
 
@@ -45,9 +45,9 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
                     {
                         let mut state = state_arc.lock().unwrap();
 
-                        for param in Param::sorted()
+                        for param in ParamKind::sorted()
                             .iter()
-                            .filter(|p| p.config().access() == Access::ReadOnly)
+                            .filter(|p| p.def().access == Access::ReadOnly)
                         {
                             let new_value = {
                                 let device = device_arc.lock().unwrap();
@@ -91,8 +91,8 @@ struct UiState {
 }
 
 struct InnerUiState {
-    params: HashMap<Param, Value>,
-    previous_params: HashMap<Param, Value>,
+    params: HashMap<ParamKind, Value>,
+    previous_params: HashMap<ParamKind, Value>,
 }
 
 impl UiState {
@@ -109,7 +109,7 @@ impl UiState {
     }
 
     fn update_all_params(&self) -> eyre::Result<()> {
-        let params = Param::sorted()
+        let params = ParamKind::sorted()
             .into_iter()
             .map(|p| {
                 let value = {
@@ -135,51 +135,54 @@ impl eframe::App for UiState {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Unofficial CLI & UI for the ReSpeaker Mic Array v2.0");
             egui::Grid::new("Parameter grid").show(ui, |ui| {
-        
-                for param in Param::sorted() {
+                for param in ParamKind::sorted() {
+                    let def = param.def();
                     let mut state = self.state.lock().unwrap();
                     let value = state.params.get_mut(&param).unwrap();
 
                     ui.label(format!("{param:?}"));
                     match value {
-                        Value::Int(c, i) => {
-                            ui.horizontal(|ui| match param.config() {
-                                ParamConfig::IntMany(_) => {
+                        Value::Int(i) => {
+                            ui.horizontal(|ui| match def.param_type {
+                                ParamType::IntRange { min, max } => {
                                     ui.add_enabled(
-                                        c.access == Access::ReadWrite,
-                                        egui::Slider::new(i, c.min..=c.max)
-                                            .text(format!("{}..={}", c.min, c.max)),
+                                        def.access == Access::ReadWrite,
+                                        egui::Slider::new(i, min..=max)
+                                            .text(format!("{min}..={max}")),
                                     );
                                 }
-                                ParamConfig::IntFew(_) => {
-                                    if c.access == Access::ReadWrite {
+                                ParamType::IntDiscete { min: _, max: _ } => {
+                                    if def.access == Access::ReadWrite {
                                         egui::ComboBox::from_id_salt(param)
-                                            .selected_text(&c.value_descriptions[*i as usize])
+                                            .selected_text(def.value_descriptions[*i as usize])
                                             .show_ui(ui, |ui| {
                                                 for (e, v) in
-                                                    c.value_descriptions.iter().enumerate()
+                                                    def.value_descriptions.iter().enumerate()
                                                 {
-                                                    ui.selectable_value(i, e as i32, v);
+                                                    ui.selectable_value(i, e as i32, *v);
                                                 }
                                             });
                                     } else {
-                                        ui.label(&c.value_descriptions[*i as usize]);
+                                        ui.label(def.value_descriptions[*i as usize]);
                                     }
                                 }
-                                ParamConfig::Float(_) => unreachable!(),
+                                _ => unreachable!(),
                             });
-                            ui.label(&c.description);
+                            ui.label(def.description);
                         }
-                        Value::Float(c, f) => {
-                            ui.horizontal(|ui| {
-                                ui.add_enabled(
-                                    c.access == Access::ReadWrite,
-                                    egui::Slider::new(f, c.min..=c.max)
-                                        .text(format!("{}..={}", c.min, c.max)),
-                                );
-                            });
-                            ui.label(&c.description);
-                        }
+                        Value::Float(f) => match def.param_type {
+                            ParamType::FloatRange { min, max } => {
+                                ui.horizontal(|ui| {
+                                    ui.add_enabled(
+                                        def.access == Access::ReadWrite,
+                                        egui::Slider::new(f, min..=max)
+                                            .text(format!("{min}..={max}")),
+                                    );
+                                });
+                                ui.label(def.description);
+                            }
+                            _ => unreachable!(),
+                        },
                     }
                     ui.end_row();
                 }

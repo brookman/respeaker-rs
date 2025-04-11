@@ -10,8 +10,8 @@ use strum::IntoEnumIterator;
 use tabled::{Table, Tabled};
 use tracing::info;
 
-use crate::params::{Access, Param, ParamConfig, ParamState, Value};
-use eyre::{OptionExt, Result, bail};
+use crate::params::{Access, ParamKind, ParamState, ParamType, Value};
+use eyre::{bail, OptionExt, Result};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -91,7 +91,7 @@ impl ReSpeakerDevice {
         bail!("No devices found")
     }
 
-    pub fn read(&self, param: &Param) -> Result<Value> {
+    pub fn read(&self, param: &ParamKind) -> Result<Value> {
         let value = self.read_internal(param)?;
         {
             let mut params = self.param_state.lock().unwrap();
@@ -100,18 +100,12 @@ impl ReSpeakerDevice {
         Ok(value)
     }
 
-    fn read_internal(&self, param: &Param) -> Result<Value> {
+    fn read_internal(&self, param: &ParamKind) -> Result<Value> {
         let start = Instant::now();
-        let param_config = param.config();
-        let (is_int, id, cmd) = match param_config {
-            ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
-                (true, config.id, config.cmd)
-            }
-            ParamConfig::Float(config) => (false, config.id, config.cmd),
-        };
+        let def = param.def();
 
-        let mut cmd = 0x80 | cmd;
-        if is_int {
+        let mut cmd = 0x80 | def.cmd;
+        if def.param_type.is_int() {
             cmd |= 0x40;
         }
 
@@ -124,33 +118,26 @@ impl ReSpeakerDevice {
         );
 
         self.handle
-            .read_control(request_type, 0, cmd, id, &mut buffer, TIMEOUT)?;
+            .read_control(request_type, 0, cmd, def.id, &mut buffer, TIMEOUT)?;
         let response = (
             i32::from_le_bytes(buffer[0..4].try_into()?),
             i32::from_le_bytes(buffer[4..8].try_into()?),
         );
         info!("Read parameter {:?} in {:?}", param, start.elapsed());
 
-        if is_int {
-            if let ParamConfig::IntMany(config) | ParamConfig::IntFew(config) = param_config {
-                return Ok(Value::Int(config.clone(), response.0));
-            }
-            unreachable!();
+        Ok(if def.param_type.is_int() {
+            Value::Int(response.0)
         } else {
             #[allow(clippy::cast_possible_truncation)]
             let float = (f64::from(response.0) * f64::from(response.1).exp2()) as f32;
-
-            if let ParamConfig::Float(config) = param_config {
-                return Ok(Value::Float(config.clone(), float));
-            }
-            unreachable!();
-        }
+            Value::Float(float)
+        })
     }
 
-    fn read_all(&self) -> Result<HashMap<Param, Value>> {
+    fn read_all(&self) -> Result<HashMap<ParamKind, Value>> {
         let mut result = HashMap::new();
 
-        for p in Param::iter() {
+        for p in ParamKind::iter() {
             let value = self.read(&p)?;
             result.insert(p, value);
         }
@@ -158,10 +145,10 @@ impl ReSpeakerDevice {
         Ok(result)
     }
 
-    pub fn read_ro(&self) -> Result<HashMap<Param, Value>> {
+    pub fn read_ro(&self) -> Result<HashMap<ParamKind, Value>> {
         let mut result = HashMap::new();
 
-        for p in Param::iter().filter(|p| p.config().access() == Access::ReadOnly) {
+        for p in ParamKind::iter().filter(|p| p.def().access == Access::ReadOnly) {
             let value = self.read(&p)?;
             result.insert(p, value);
         }
@@ -169,60 +156,39 @@ impl ReSpeakerDevice {
         Ok(result)
     }
 
-    pub fn write(&self, param: &Param, value: &Value) -> Result<()> {
-        let config = param.config();
+    pub fn write(&self, param: &ParamKind, value: &Value) -> Result<()> {
+        let def = param.def();
 
-        let (id, cmd, access) = match config {
-            ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
-                (config.id, config.cmd, config.access)
-            }
-            ParamConfig::Float(config) => (config.id, config.cmd, config.access),
-        };
-
-        if access == Access::ReadOnly {
+        if def.access == Access::ReadOnly {
             bail!("Parameter {:?} is read-only", param);
         }
 
-        let (cmd_bytes, value_bytes, type_bytes) = match config {
-            ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => {
-                let value = match value {
-                    Value::Int(_, i) => *i,
-                    Value::Float(_, _) => bail!("Value must be of type int"),
-                };
-
-                if value < config.min || value > config.max {
-                    bail!(
-                        "Value {value} is not in range {}..={}",
-                        config.min,
-                        config.max
-                    );
+        let (value_bytes, type_bytes) = match def.param_type {
+            ParamType::IntDiscete { min, max } | ParamType::IntRange { min, max } => match value {
+                Value::Int(value) => {
+                    if value < &min || value > &max {
+                        bail!("Value {value} is not in range {}..={}", min, max);
+                    }
+                    (value.to_le_bytes(), 1i32.to_le_bytes())
                 }
-                (
-                    i32::from(cmd).to_le_bytes(),
-                    value.to_le_bytes(),
-                    1i32.to_le_bytes(),
-                )
-            }
-            ParamConfig::Float(config) => {
-                let value = match value {
-                    Value::Int(_, _) => bail!("Value must be of type float"),
-                    Value::Float(_, f) => *f,
-                };
-
-                if value < config.min || value > config.max {
-                    bail!(
-                        "Value {value} is not in range {}..={}",
-                        config.min,
-                        config.max
-                    );
+                Value::Float(_) => {
+                    bail!("Parameter type and value mismatch. Value must be i32 but was f32");
                 }
-                (
-                    i32::from(cmd).to_le_bytes(),
-                    value.to_le_bytes(),
-                    0i32.to_le_bytes(),
-                )
-            }
+            },
+            ParamType::FloatRange { min, max } => match value {
+                Value::Int(_) => {
+                    bail!("Parameter type and value mismatch. Value must be f32 but was i32");
+                }
+                Value::Float(value) => {
+                    if value < &min || value > &max {
+                        bail!("Value {value} is not in range {}..={}", min, max);
+                    }
+                    (value.to_le_bytes(), 0i32.to_le_bytes())
+                }
+            },
         };
+
+        let cmd_bytes = i32::from(def.cmd).to_le_bytes();
 
         let mut payload = Vec::with_capacity(12);
         payload.extend_from_slice(&cmd_bytes);
@@ -236,7 +202,7 @@ impl ReSpeakerDevice {
         );
 
         self.handle
-            .write_control(request_type, 0, 0, id, &payload, TIMEOUT)?;
+            .write_control(request_type, 0, 0, def.id, &payload, TIMEOUT)?;
 
         info!("Wrote value {value} to param {:?} successfully", param);
 
@@ -282,39 +248,31 @@ impl ReSpeakerDevice {
     pub fn list(&self) -> Result<String> {
         let param_map = self.read_all()?;
         let mut rows = vec![];
-        for p in Param::iter() {
-            let config = p.config();
+        for p in ParamKind::iter() {
+            let def = p.def();
+
             let value = param_map.get(&p).ok_or_eyre("Param not found")?;
-            match config {
-                ParamConfig::IntMany(config) | ParamConfig::IntFew(config) => rows.push(TableRow {
-                    name: format!("{p:?}"),
-                    value: value.clone(),
-                    t: "int".to_string(),
-                    access: if config.access == Access::ReadOnly {
-                        "ro"
-                    } else {
-                        "rw"
-                    }
-                    .to_string(),
-                    range: format!("{}..{}", config.min, config.max),
-                    description: config.description.clone(),
-                    values: config.value_descriptions.join("\n"),
-                }),
-                ParamConfig::Float(config) => rows.push(TableRow {
-                    name: format!("{p:?}"),
-                    value: value.clone(),
-                    t: "float".to_string(),
-                    access: if config.access == Access::ReadOnly {
-                        "ro"
-                    } else {
-                        "rw"
-                    }
-                    .to_string(),
-                    range: format!("{}..{}", config.min, config.max),
-                    description: config.description.clone(),
-                    values: config.value_descriptions.join("\n"),
-                }),
-            }
+
+            let t = if def.param_type.is_int() {
+                "int"
+            } else {
+                "float"
+            };
+
+            rows.push(TableRow {
+                name: format!("{p:?}"),
+                value: value.clone(),
+                t: t.to_string(),
+                access: if def.access == Access::ReadOnly {
+                    "ro"
+                } else {
+                    "rw"
+                }
+                .to_string(),
+                range: format!("{}..{}", def.min(), def.max()),
+                description: def.description.to_string(),
+                values: def.value_descriptions.join("\n"),
+            });
         }
         Ok(Table::new(rows).to_string())
     }

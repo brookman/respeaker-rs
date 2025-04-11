@@ -8,15 +8,15 @@ use std::{
 };
 
 use cpal::{
-    StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
+    StreamConfig,
 };
-use eyre::{OptionExt, bail};
+use eyre::{bail, OptionExt};
 use tracing::{error, info, trace};
 
 use crate::{
     csv::write_csv,
-    params::{Param, Value},
+    params::{ParamKind, Value},
     respeaker_device::ReSpeakerDevice,
 };
 
@@ -89,9 +89,9 @@ pub fn record_audio(
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
-    let join_handle: thread::JoinHandle<eyre::Result<Vec<(f32, HashMap<Param, Value>)>>> =
+    let join_handle: thread::JoinHandle<eyre::Result<Vec<(f32, HashMap<ParamKind, Value>)>>> =
         thread::spawn(move || {
-            let mut csv_data: Vec<(f32, HashMap<Param, Value>)> = vec![];
+            let mut csv_data: Vec<(f32, HashMap<ParamKind, Value>)> = vec![];
             let start = Instant::now();
             loop {
                 if shutdown_rx.try_recv().is_ok() {

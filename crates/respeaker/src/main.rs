@@ -3,18 +3,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use clap::{Parser, Subcommand, command};
+use clap::{command, Parser, Subcommand};
+use eyre::eyre;
 use eyre::Ok;
 use eyre::Result;
-use eyre::eyre;
-use params::Param;
+use params::ParamKind;
 use params::ParamState;
-use params::ParseValue;
 use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
-use tracing::Level;
 use tracing::info;
+use tracing::Level;
 use ui::run_ui;
 
 mod csv;
@@ -40,9 +39,9 @@ enum Command {
     /// List all available parameters and their current values (RW and RO)
     List,
     /// Read the value of a specific parameter
-    Read { param: Param },
+    Read { param: ParamKind },
     /// Write the value of a specific parameter
-    Write { param: Param, value: String },
+    Write { param: ParamKind, value: String },
     /// Perform a device reset
     Reset,
     /// Record audio for the provided amount of seconds
@@ -64,7 +63,7 @@ fn main() -> eyre::Result<()> {
         current_params: HashMap::new(),
     }));
 
-    let mut device = ReSpeakerDevice::open(args.device_index, shared_state.clone())?;
+    let mut device = ReSpeakerDevice::open(args.device_index, shared_state)?;
 
     if let Some(command) = args.command {
         match command {
@@ -77,7 +76,7 @@ fn main() -> eyre::Result<()> {
                 info!("\n{param:?}={value}");
             }
             Command::Write { param, value } => {
-                let value = param.config().parse_value(&value)?;
+                let value = param.parse_value(&value)?;
                 device.write(&param, &value)?;
             }
             Command::Reset => device.reset()?,
