@@ -9,7 +9,8 @@ use eyre::Ok;
 use eyre::Result;
 use params::ParamKind;
 use params::ParamState;
-use recorder::record_audio;
+use recorder::record_respeaker_parameters;
+// use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
 use tracing::info;
@@ -44,13 +45,10 @@ enum Command {
     Write { param: ParamKind, value: String },
     /// Perform a device reset
     Reset,
-    /// Record audio for the provided amount of seconds
+    /// Record parameters to CSV for the provided amount of seconds
     Record {
         seconds: f32,
-        wav_path: Option<PathBuf>,
-        /// Override the input device (mic) index. If not set the first Re-Speaker device will be used.
-        #[clap(short = 'm')]
-        mic_index: Option<usize>,
+        csv_path: Option<PathBuf>,
     },
 }
 
@@ -82,11 +80,11 @@ fn main() -> eyre::Result<()> {
             Command::Reset => device.reset()?,
             Command::Record {
                 seconds,
-                wav_path,
-                mic_index,
+                csv_path,
+                //  mic_index,
             } => {
                 device.list()?; // read all params into cache initially
-                record_audio(seconds, wav_path, mic_index, device)?;
+                record_respeaker_parameters(seconds, csv_path, &device)?;
             }
         }
     } else {

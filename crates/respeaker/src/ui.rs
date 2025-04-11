@@ -90,7 +90,7 @@ pub fn run_ui(device: ReSpeakerDevice) -> eyre::Result<()> {
             }
         }
     }
-
+    
     result
 }
 
