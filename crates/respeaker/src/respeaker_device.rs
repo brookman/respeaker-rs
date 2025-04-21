@@ -17,7 +17,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct ReSpeakerDevice {
     index: usize,
-    handle: Arc<Mutex<DeviceHandle<GlobalContext>>>,
+    handle: DeviceHandle<GlobalContext>,
     interface_number: u8,
     param_state: Arc<Mutex<ParamState>>,
 }
@@ -29,7 +29,7 @@ impl ReSpeakerDevice {
             device: &Device<GlobalContext>,
             param_state: Arc<Mutex<ParamState>>,
         ) -> Result<ReSpeakerDevice> {
-            let handle = Arc::new(Mutex::new(device.open()?));
+            let handle =device.open()?;
 
             let config_desc = device.active_config_descriptor()?;
             for interface in config_desc.interfaces() {
@@ -118,7 +118,7 @@ impl ReSpeakerDevice {
         );
 
         {
-            self.handle.lock().expect("Lock failed").read_control(
+            self.handle.read_control(
                 request_type,
                 0,
                 cmd,
@@ -213,7 +213,7 @@ impl ReSpeakerDevice {
         );
 
         {
-            self.handle.lock().expect("Lock failed").write_control(
+            self.handle.write_control(
                 request_type,
                 0,
                 0,
@@ -244,11 +244,9 @@ impl ReSpeakerDevice {
         );
 
         {
-            let handle = self.handle.lock().expect("Lock failed");
+            self.handle.claim_interface(self.interface_number)?;
 
-            handle.claim_interface(self.interface_number)?;
-
-            handle.write_control(
+            self.handle.write_control(
                 request_type,
                 XMOS_DFU_RESETDEVICE,
                 0,
@@ -257,7 +255,7 @@ impl ReSpeakerDevice {
                 TIMEOUT,
             )?;
 
-            handle.release_interface(self.interface_number)?;
+            self.handle.release_interface(self.interface_number)?;
         }
 
         info!("Reset was successfull. Waiting 2 s before re-opening...");
