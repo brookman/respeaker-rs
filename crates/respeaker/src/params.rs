@@ -132,7 +132,7 @@ impl ParamKind {
 #[derive(Debug)]
 pub struct ParamDef {
     pub param_type: ParamType,
-    pub id: u16,
+    pub index: u16,
     pub cmd: u16,
     pub access: Access,
     pub description: &'static str,
@@ -194,7 +194,7 @@ impl Display for Value {
 }
 
 const fn int_discrete<const N: usize>(
-    id: u16,
+    index: u16,
     cmd: u16,
     access: Access,
     description: &'static str,
@@ -202,7 +202,7 @@ const fn int_discrete<const N: usize>(
 ) -> ParamDef {
     ParamDef {
         param_type: ParamType::IntDiscete { min: 0, max: N - 1 },
-        id,
+        index,
         cmd,
         access,
         description,
@@ -211,7 +211,7 @@ const fn int_discrete<const N: usize>(
 }
 
 const fn int_range(
-    id: u16,
+    index: u16,
     cmd: u16,
     max: usize,
     min: usize,
@@ -221,7 +221,7 @@ const fn int_range(
 ) -> ParamDef {
     ParamDef {
         param_type: ParamType::IntRange { min, max },
-        id,
+        index,
         cmd,
         access,
         description,
@@ -230,7 +230,7 @@ const fn int_range(
 }
 
 const fn float_range(
-    id: u16,
+    index: u16,
     cmd: u16,
     max: f32,
     min: f32,
@@ -239,7 +239,7 @@ const fn float_range(
 ) -> ParamDef {
     ParamDef {
         param_type: ParamType::FloatRange { min, max },
-        id,
+        index,
         cmd,
         access,
         description,

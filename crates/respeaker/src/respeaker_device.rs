@@ -122,7 +122,7 @@ impl ReSpeakerDevice {
                 request_type,
                 0,
                 cmd,
-                def.id,
+                def.index,
                 &mut buffer,
                 TIMEOUT,
             )?;
@@ -217,7 +217,7 @@ impl ReSpeakerDevice {
                 request_type,
                 0,
                 0,
-                def.id,
+                def.index,
                 &payload,
                 TIMEOUT,
             )?;

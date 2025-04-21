@@ -10,7 +10,6 @@ use eyre::Result;
 use params::ParamKind;
 use params::ParamState;
 use recorder::record_respeaker_parameters;
-// use recorder::record_audio;
 use respeaker_device::ReSpeakerDevice;
 
 use tracing::info;
