@@ -13,7 +13,10 @@ impl CsvWriter {
         let params: Vec<ParamKind> = ParamKind::sorted();
         let mut writer = Writer::from_writer(File::create(file_path)?);
 
-        let mut headers = vec!["timestamp".to_string()];
+        let mut headers = vec![
+            "timestamp_before_read".to_string(),
+            "timestamp_after_read".to_string(),
+        ];
         headers.extend(params.iter().map(|p| format!("{p:?}")));
         writer.write_record(&headers)?;
         writer.flush()?;
@@ -21,9 +24,14 @@ impl CsvWriter {
         Ok(Self { writer })
     }
 
-    pub fn write_row(&mut self, time: f32, values: &HashMap<ParamKind, Value>) -> eyre::Result<()> {
+    pub fn write_row(
+        &mut self,
+        timestamp_before: &str,
+        timestamp_after: &str,
+        values: &HashMap<ParamKind, Value>,
+    ) -> eyre::Result<()> {
         let params: Vec<ParamKind> = ParamKind::sorted();
-        let mut record = vec![time.to_string()];
+        let mut record = vec![timestamp_before.to_string(), timestamp_after.to_string()];
 
         record.extend(
             params

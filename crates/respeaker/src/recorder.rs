@@ -1,13 +1,13 @@
+use chrono::Local;
 use std::{
-    f32,
-    fs::create_dir,
+    f32, fs,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use eyre::Ok;
@@ -23,17 +23,22 @@ pub fn record_respeaker_parameters(
 ) -> eyre::Result<()> {
     let dir = PathBuf::from("./recordings");
     if csv_path.is_none() && !dir.exists() {
-        create_dir(dir)?;
+        fs::create_dir(dir)?;
     }
-    let creation_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let csv_path =
-        csv_path.unwrap_or_else(|| PathBuf::from(format!("./recordings/{creation_time}.csv")));
-    let mut csv_writer = CsvWriter::new(&csv_path)?;
 
     let start = Instant::now();
+
+    let csv_path = csv_path.unwrap_or_else(|| {
+        let timetamp = iso8601();
+        let timestap_save = timetamp.replace(':', "_");
+        PathBuf::from(format!("./recordings/{timestap_save}.csv"))
+    });
+    let mut csv_writer = CsvWriter::new(&csv_path)?;
+
     while running.load(Ordering::SeqCst)
         && start.elapsed().as_secs_f32() <= seconds_to_record.unwrap_or(f32::INFINITY)
     {
+        let before = iso8601();
         device.read_ro()?; // update readonly values
         let values = {
             let params = device
@@ -44,7 +49,8 @@ pub fn record_respeaker_parameters(
                 .clone();
             params
         };
-        csv_writer.write_row(start.elapsed().as_secs_f32(), &values)?;
+        let after = iso8601();
+        csv_writer.write_row(&before, &after, &values)?;
 
         thread::sleep(Duration::from_millis(10));
     }
@@ -54,4 +60,9 @@ pub fn record_respeaker_parameters(
     info!("Recording done");
 
     Ok(())
+}
+
+fn iso8601() -> String {
+    let dt = Local::now();
+    format!("{}", dt.format("%+"))
 }
