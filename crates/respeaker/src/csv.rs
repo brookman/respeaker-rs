@@ -1,24 +1,28 @@
 use std::{collections::HashMap, fs::File, path::PathBuf};
 
 use csv::Writer;
-use tracing::info;
 
 use crate::params::{ParamKind, Value};
 
-pub fn write_csv(
-    data: Vec<(f32, HashMap<ParamKind, Value>)>,
-    file_path: &PathBuf,
-) -> eyre::Result<()> {
-    info!("Writing CSV file '{file_path:?}' with {} lines", data.len());
+pub struct CsvWriter {
+    writer: Writer<File>,
+}
 
-    let params: Vec<ParamKind> = ParamKind::sorted();
-    let mut wtr = Writer::from_writer(File::create(file_path)?);
+impl CsvWriter {
+    pub fn new(file_path: &PathBuf) -> eyre::Result<CsvWriter> {
+        let params: Vec<ParamKind> = ParamKind::sorted();
+        let mut writer = Writer::from_writer(File::create(file_path)?);
 
-    let mut headers = vec!["timestamp".to_string()];
-    headers.extend(params.iter().map(|p| format!("{p:?}")));
-    wtr.write_record(&headers)?;
+        let mut headers = vec!["timestamp".to_string()];
+        headers.extend(params.iter().map(|p| format!("{p:?}")));
+        writer.write_record(&headers)?;
+        writer.flush()?;
 
-    for (time, row) in data {
+        Ok(CsvWriter { writer })
+    }
+
+    pub fn write_row(&mut self, time: f32, row: HashMap<ParamKind, Value>) -> eyre::Result<()> {
+        let params: Vec<ParamKind> = ParamKind::sorted();
         let mut record = vec![time.to_string()];
 
         record.extend(
@@ -27,9 +31,7 @@ pub fn write_csv(
                 .map(|param| row.get(param).map_or_else(String::new, Value::to_string)),
         );
 
-        wtr.write_record(&record)?;
+        self.writer.write_record(&record)?;
+        Ok(())
     }
-
-    wtr.flush()?;
-    Ok(())
 }

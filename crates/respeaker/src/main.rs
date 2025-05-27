@@ -1,7 +1,12 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use clap::{command, Parser, Subcommand};
 use eyre::eyre;
@@ -38,8 +43,12 @@ struct Arguments {
 enum Command {
     /// List all available parameters and their current values (RW and RO).
     List,
-    /// Read the value of a specific parameter.
-    Read { param: ParamKind },
+    /// Read the value of specific parameters.
+    Read {
+        #[clap(short = 'c', default_value_t = true)]
+        continuous: bool,
+        params: Vec<ParamKind>,
+    },
     /// Write the value of a specific parameter.
     Write { param: ParamKind, value: String },
     /// Perform a device reset.
@@ -47,13 +56,21 @@ enum Command {
     /// Continously record parameters to CSV file during the provided amount of seconds.
     /// The RW parameters are only read once at the start.
     Record {
-        seconds: f32,
+        #[clap(short = 's')]
+        seconds: Option<f32>,
         csv_path: Option<PathBuf>,
     },
 }
 
 fn main() -> eyre::Result<()> {
     let args: Arguments = init()?;
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     info!("Running unofficial ReSpeaker CLI with {args:?}");
 
@@ -69,10 +86,25 @@ fn main() -> eyre::Result<()> {
                 let list = device.list()?;
                 info!("Parameters:\n{list}");
             }
-            Command::Read { param } => {
-                let value = device.read(&param)?;
-                info!("\n{param:?}={value}");
-            }
+            Command::Read { params, continuous } => loop {
+                let values = params
+                    .iter()
+                    .map(|param| {
+                        let value = device.read(param)?;
+                        Ok((param, value))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let mut result = String::new();
+                for (param, value) in values {
+                    write!(&mut result, "\n{param:?}={value}")?;
+                }
+                info!("{result}");
+                if !continuous {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            },
             Command::Write { param, value } => {
                 let value = param.parse_value(&value)?;
                 device.write(&param, &value)?;
@@ -80,7 +112,7 @@ fn main() -> eyre::Result<()> {
             Command::Reset => device.reset()?,
             Command::Record { seconds, csv_path } => {
                 device.list()?; // cache rw params
-                record_respeaker_parameters(seconds, csv_path, &device)?;
+                record_respeaker_parameters(seconds, csv_path, &device, &running)?;
             }
         }
     } else {

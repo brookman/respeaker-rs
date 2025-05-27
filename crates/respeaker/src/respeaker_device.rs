@@ -29,7 +29,7 @@ impl ReSpeakerDevice {
             device: &Device<GlobalContext>,
             param_state: Arc<Mutex<ParamState>>,
         ) -> Result<ReSpeakerDevice> {
-            let handle =device.open()?;
+            let handle = device.open()?;
 
             let config_desc = device.active_config_descriptor()?;
             for interface in config_desc.interfaces() {
@@ -117,16 +117,8 @@ impl ReSpeakerDevice {
             rusb::Recipient::Device,
         );
 
-        {
-            self.handle.read_control(
-                request_type,
-                0,
-                cmd,
-                def.index,
-                &mut buffer,
-                TIMEOUT,
-            )?;
-        }
+        self.handle
+            .read_control(request_type, 0, cmd, def.index, &mut buffer, TIMEOUT)?;
 
         let response = (
             i32::from_le_bytes(buffer[0..4].try_into()?),
@@ -145,6 +137,7 @@ impl ReSpeakerDevice {
     }
 
     fn read_all(&self) -> Result<HashMap<ParamKind, Value>> {
+        let start = Instant::now();
         let mut result = HashMap::new();
 
         for p in ParamKind::iter() {
@@ -152,6 +145,7 @@ impl ReSpeakerDevice {
             result.insert(p, value);
         }
 
+        info!("Read all parameters sequentially in {:?}", start.elapsed());
         Ok(result)
     }
 
@@ -212,16 +206,8 @@ impl ReSpeakerDevice {
             rusb::Recipient::Device,
         );
 
-        {
-            self.handle.write_control(
-                request_type,
-                0,
-                0,
-                def.index,
-                &payload,
-                TIMEOUT,
-            )?;
-        }
+        self.handle
+            .write_control(request_type, 0, 0, def.index, &payload, TIMEOUT)?;
 
         info!("Wrote value {value} to param {:?} successfully", param);
 
@@ -243,20 +229,18 @@ impl ReSpeakerDevice {
             rusb::Recipient::Interface,
         );
 
-        {
-            self.handle.claim_interface(self.interface_number)?;
+        self.handle.claim_interface(self.interface_number)?;
 
-            self.handle.write_control(
-                request_type,
-                XMOS_DFU_RESETDEVICE,
-                0,
-                u16::from(self.interface_number),
-                &[],
-                TIMEOUT,
-            )?;
+        self.handle.write_control(
+            request_type,
+            XMOS_DFU_RESETDEVICE,
+            0,
+            u16::from(self.interface_number),
+            &[],
+            TIMEOUT,
+        )?;
 
-            self.handle.release_interface(self.interface_number)?;
-        }
+        self.handle.release_interface(self.interface_number)?;
 
         info!("Reset was successfull. Waiting 2 s before re-opening...");
 
